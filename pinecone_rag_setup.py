@@ -45,6 +45,121 @@ def safe_float(value) -> float:
     except Exception:
         return 0.0
 
+def load_analytics_data() -> pd.DataFrame:
+    """Load cleaned dataset for analytics agent"""
+    try:
+        # Prefer cleaned dataset if available
+        if os.path.exists('property_data_cleaned.csv'):
+            df = pd.read_csv('property_data_cleaned.csv', encoding='utf-8')
+        else:
+            # Fallback to embeddings-ready
+            df = pd.read_csv('property_embeddings_ready.csv', encoding='utf-8')
+        # Normalize/parse dates if available
+        if 'listing_update_date' in df.columns:
+            df['listing_update_date'] = pd.to_datetime(df['listing_update_date'], errors='coerce')
+        return df
+    except Exception as e:
+        print(f"[ERROR] Failed to load analytics data: {e}")
+        return pd.DataFrame()
+
+class DataAnalyticsAgent:
+    """Rule-based analytics agent that converts natural language to pandas filters and returns top rows context."""
+
+    def __init__(self, analytics_df: pd.DataFrame):
+        self.df = analytics_df.copy()
+        self.schema = {col: str(self.df[col].dtype) for col in self.df.columns}
+
+    def _compute_days_since_update_inline(self, df: pd.DataFrame) -> pd.DataFrame:
+        if 'listing_update_date' in df.columns:
+            now = pd.Timestamp.now(tz=None)
+            df['listing_update_date'] = pd.to_datetime(df['listing_update_date'], errors='coerce')
+            df['days_since_update'] = (now - df['listing_update_date']).dt.days
+        return df
+
+    def analyze(self, nl_query: str, top_k: int = 7) -> Dict[str, Any]:
+        """Use Gemini to produce a pandas query plan and execute it safely."""
+        if self.df.empty:
+            return {"context": "No analytics data available.", "rows": []}
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        schema_preview = "\n".join([f"- {c}: {t}" for c, t in self.schema.items()][:40])
+        prompt = f"""
+You are a data analyst. Given a user question and a pandas DataFrame named df with the following schema and semantics, write Python code that:
+1) Optionally adds helper columns (e.g., days_since_update from listing_update_date)
+2) Filters/Sorts df per the question intent
+3) Selects relevant columns
+4) Returns a variable named result which is a pandas DataFrame with at most {top_k} rows.
+
+Rules:
+- Use only pandas on the provided df. Do NOT read files.
+- Avoid unsafe operations, eval, exec on user content.
+- Assume columns may be missing; guard with checks.
+- Do not print; only create result.
+
+Schema preview:
+{schema_preview}
+
+User question:
+{nl_query}
+
+Return only Python code (no backticks).
+        """
+
+        try:
+            gen = model.generate_content(prompt)
+            code = gen.text or ""
+        except Exception as e:
+            code = ""
+
+        # Build a safe execution environment
+        local_env: Dict[str, Any] = {}
+        # Start from a working copy
+        df = self.df.copy()
+        df = self._compute_days_since_update_inline(df)
+        local_env['pd'] = pd
+        local_env['np'] = np
+        local_env['df'] = df
+        local_env['result'] = pd.DataFrame()
+
+        # Safety: strip forbidden keywords
+        forbidden = ['os.', 'sys.', 'open(', 'subprocess', 'eval(', 'exec(', 'import ', '__', 'pickle', 'pathlib']
+        safe_code = code
+        for bad in forbidden:
+            safe_code = safe_code.replace(bad, '# removed ')
+
+        try:
+            exec(safe_code, {}, local_env)
+        except Exception:
+            # fallback: simple sort by days_since_update or price
+            tmp = df.copy()
+            cols = [c for c in ['type_standardized','property_type_full_description','bedrooms','bathrooms','price','address','is_new_home','listing_update_date','days_since_update','price_category'] if c in tmp.columns]
+            if 'days_since_update' in tmp.columns:
+                tmp = tmp.sort_values('days_since_update', ascending=True)
+            elif 'price' in tmp.columns:
+                tmp = tmp.sort_values('price', ascending=True)
+            local_env['result'] = tmp[cols].head(top_k)
+
+        result_df = local_env.get('result')
+        if not isinstance(result_df, pd.DataFrame):
+            result_df = pd.DataFrame()
+        # enforce top_k
+        result_df = result_df.head(top_k)
+
+        # Build context
+        lines = []
+        for _, row in result_df.iterrows():
+            desc = str(row.get('property_type_full_description', '')) or str(row.get('type_standardized', ''))
+            line = f"- {desc} | bed: {row.get('bedrooms','')} | bath: {row.get('bathrooms','')} | price: {row.get('price','')} | addr: {row.get('address','')}"
+            if 'days_since_update' in result_df.columns and pd.notna(row.get('days_since_update', None)):
+                line += f" | days_since_update: {row.get('days_since_update')}"
+            if 'is_new_home' in result_df.columns:
+                line += f" | new: {row.get('is_new_home')}"
+            lines.append(line)
+        context = "Analytics Top Results (pandas via Gemini):\n" + "\n".join(lines) if lines else "No matching rows found."
+        return {"context": context, "rows": result_df.to_dict(orient='records'), "generated_code": safe_code}
+
 def setup_pinecone():
     """Initialize Pinecone client and create index"""
     try:
@@ -283,6 +398,7 @@ class PropertyRAGAgent:
         self.index = pinecone_index
         self.model = gemini_model
         self.hf_model = setup_hf_embeddings()
+        self.analytics_agent = DataAnalyticsAgent(load_analytics_data())
         
     def search_properties(self, query: str, top_k: int = 7) -> List[Dict]:
         """Search for relevant properties using semantic similarity"""
@@ -306,6 +422,9 @@ class PropertyRAGAgent:
     def generate_response(self, query: str, search_results: List[Dict]) -> str:
         """Generate response using Gemini based on retrieved properties"""
         try:
+            # Run analytics agent and include as context
+            analytics = self.analytics_agent.analyze(query, top_k=7)
+            analytics_context = analytics.get('context', '')
             # Prepare context from search results
             context = "Property Information:\n"
             for i, result in enumerate(search_results, 1):
@@ -320,6 +439,9 @@ class PropertyRAGAgent:
             User Query: {query}
             
             {context}
+            
+            In addition, here is the analytics context computed directly from the dataset using pandas:
+            {analytics_context}
             
             Please provide a comprehensive answer based on the property data above. Include specific details like prices, locations, and property features when relevant.
             """
@@ -342,7 +464,7 @@ class PropertyRAGAgent:
         if not search_results:
             return "I couldn't find any relevant properties for your query. Please try rephrasing your question."
         
-        print(f"📋 Found {len(search_results)} relevant properties")
+        print(f"[INFO] Found {len(search_results)} relevant properties")
         
         # Generate response
         response = self.generate_response(query, search_results)

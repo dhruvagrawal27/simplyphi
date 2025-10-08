@@ -47,6 +47,13 @@ def test_rag_system():
         for i, query in enumerate(test_queries, 1):
             print(f"\n[QUERY] Test Query {i}: {query}")
             try:
+                # Run analytics only to show context in test
+                analytics = rag_agent.analytics_agent.analyze(query, top_k=7)
+                print("[ANALYTICS CONTEXT]\n" + analytics.get('context',''))
+                gen_code = analytics.get('generated_code','')
+                if gen_code:
+                    print("\n[GENERATED PANDAS CODE]\n" + gen_code)
+                # Full RAG response
                 response = rag_agent.chat(query)
                 print(f"[OK] Response generated successfully")
                 print(f"[PREVIEW] {response}...")
