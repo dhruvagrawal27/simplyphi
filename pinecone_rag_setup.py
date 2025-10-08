@@ -29,6 +29,11 @@ PINECONE_INDEX_NAME = "property-data-rag"
 EMBEDDING_DIMENSION = 384  # all-MiniLM-L6-v2 embedding dimension
 BATCH_SIZE = 250  # Process embeddings in batches
 
+# Cached singletons
+_CACHED_PINECONE_INDEX = None
+_CACHED_HF_MODEL = None
+_CACHED_GEMINI_MODEL = None
+
 def safe_int(value) -> int:
     try:
         if pd.isna(value):
@@ -57,6 +62,8 @@ def load_analytics_data() -> pd.DataFrame:
         # Normalize/parse dates if available
         if 'listing_update_date' in df.columns:
             df['listing_update_date'] = pd.to_datetime(df['listing_update_date'], errors='coerce')
+            # Handle NaT values
+            df['listing_update_date'] = df['listing_update_date'].fillna(pd.Timestamp('1900-01-01'))
         return df
     except Exception as e:
         print(f"[ERROR] Failed to load analytics data: {e}")
@@ -73,7 +80,9 @@ class DataAnalyticsAgent:
         if 'listing_update_date' in df.columns:
             now = pd.Timestamp.now(tz=None)
             df['listing_update_date'] = pd.to_datetime(df['listing_update_date'], errors='coerce')
+            # Handle NaT values properly
             df['days_since_update'] = (now - df['listing_update_date']).dt.days
+            df['days_since_update'] = df['days_since_update'].fillna(999)  # Fill NaT with large number
         return df
 
     def analyze(self, nl_query: str, top_k: int = 7) -> Dict[str, Any]:
@@ -86,17 +95,15 @@ class DataAnalyticsAgent:
 
         schema_preview = "\n".join([f"- {c}: {t}" for c, t in self.schema.items()][:40])
         prompt = f"""
-You are a data analyst. Given a user question and a pandas DataFrame named df with the following schema and semantics, write Python code that:
-1) Optionally adds helper columns (e.g., days_since_update from listing_update_date)
-2) Filters/Sorts df per the question intent
-3) Selects relevant columns
-4) Returns a variable named result which is a pandas DataFrame with at most {top_k} rows.
-
-Rules:
-- Use only pandas on the provided df. Do NOT read files.
-- Avoid unsafe operations, eval, exec on user content.
-- Assume columns may be missing; guard with checks.
-- Do not print; only create result.
+You are a senior pandas engineer. Convert the user's question into SAFE pandas code over an existing DataFrame named df.
+Constraints:
+- Do not import or read files. Use only df, pandas (pd), numpy (np).
+- Guard every column access with existence checks (e.g., if 'price' in df.columns: ...).
+- If needed, create days_since_update from listing_update_date using pd.to_datetime and now.
+- Prefer simple boolean filtering and sort_values; avoid eval/query strings.
+- Always build a DataFrame 'result' with at most {top_k} rows.
+- If required columns are missing, return an empty DataFrame with reasonable columns.
+- Columns commonly available: type_standardized, property_type_full_description, bedrooms, bathrooms, price, address, crime_score_weight, is_new_home, listing_update_date, price_category.
 
 Schema preview:
 {schema_preview}
@@ -104,7 +111,7 @@ Schema preview:
 User question:
 {nl_query}
 
-Return only Python code (no backticks).
+Return ONLY Python code that sets a variable named result (no backticks, no prose).
         """
 
         try:
@@ -231,6 +238,14 @@ def setup_pinecone():
         print(f"[ERROR] Error setting up Pinecone: {e}")
         return None
 
+def get_pinecone_index():
+    global _CACHED_PINECONE_INDEX
+    if _CACHED_PINECONE_INDEX is not None:
+        return _CACHED_PINECONE_INDEX
+    idx = setup_pinecone()
+    _CACHED_PINECONE_INDEX = idx
+    return idx
+
 def setup_hf_embeddings():
     """Initialize HuggingFace SentenceTransformer model for embeddings"""
     try:
@@ -265,6 +280,14 @@ def setup_hf_embeddings():
         print(f"[ERROR] Error setting up HF embeddings: {e}")
         return None
 
+def get_hf_model():
+    global _CACHED_HF_MODEL
+    if _CACHED_HF_MODEL is not None:
+        return _CACHED_HF_MODEL
+    m = setup_hf_embeddings()
+    _CACHED_HF_MODEL = m
+    return m
+
 def setup_gemini():
     """Initialize Gemini client for RAG responses"""
     try:
@@ -286,6 +309,14 @@ def setup_gemini():
     except Exception as e:
         print(f"[ERROR] Error setting up Gemini: {e}")
         return None
+
+def get_gemini_model():
+    global _CACHED_GEMINI_MODEL
+    if _CACHED_GEMINI_MODEL is not None:
+        return _CACHED_GEMINI_MODEL
+    g = setup_gemini()
+    _CACHED_GEMINI_MODEL = g
+    return g
 
 def get_embeddings_batch(texts: List[str], hf_model) -> List[List[float]]:
     """Get embeddings for a batch of texts using HuggingFace model"""
@@ -394,27 +425,104 @@ def upload_to_pinecone(df: pd.DataFrame, index, hf_model):
 class PropertyRAGAgent:
     """RAG Agent for property data queries"""
     
-    def __init__(self, pinecone_index, gemini_model):
-        self.index = pinecone_index
-        self.model = gemini_model
-        self.hf_model = setup_hf_embeddings()
+    def __init__(self, pinecone_index=None, gemini_model=None, hf_model=None, analytics_df: pd.DataFrame=None):
+        self.index = pinecone_index or get_pinecone_index()
+        self.model = gemini_model or get_gemini_model()
+        self.hf_model = hf_model or get_hf_model()
         self.analytics_agent = DataAnalyticsAgent(load_analytics_data())
-        
+        self.vector_score_threshold = 0.6
+        self.default_top_k = 15
+
+    def _extract_constraints(self, query: str) -> Dict[str, Any]:
+        q = query.lower()
+        constraints: Dict[str, Any] = {}
+        import re
+        # bedrooms
+        m = re.search(r'(\d+)\s*\+?\s*bed', q)
+        if m:
+            constraints['min_bedrooms'] = int(m.group(1))
+        # price upper bound
+        m = re.search(r'under\s*£?(\d+)', q) or re.search(r'<\s*£?(\d+)', q)
+        if m:
+            constraints['max_price'] = int(m.group(1))
+        # location
+        m = re.search(r'\bin\s+([a-z\s\-]+)', q)
+        if m:
+            constraints['location_like'] = m.group(1).strip()
+        # new home
+        if 'new home' in q or 'new homes' in q:
+            constraints['is_new_home'] = True
+        # low crime
+        if 'low crime' in q:
+            constraints['low_crime'] = True
+        return constraints
+
+    def _metadata_matches(self, md: Dict[str, Any], cons: Dict[str, Any]) -> bool:
+        # bedrooms
+        if 'min_bedrooms' in cons:
+            try:
+                if int(md.get('bedrooms', 0)) < cons['min_bedrooms']:
+                    return False
+            except Exception:
+                return False
+        # price
+        if 'max_price' in cons:
+            try:
+                if float(md.get('price', 1e12)) > cons['max_price']:
+                    return False
+            except Exception:
+                return False
+        # location
+        if 'location_like' in cons:
+            if cons['location_like'] and cons['location_like'].lower() not in str(md.get('address','')).lower():
+                return False
+        # new home
+        if cons.get('is_new_home') is True and not bool(md.get('is_new_home', False)):
+            return False
+        # low crime
+        if cons.get('low_crime') is True:
+            try:
+                if float(md.get('crime_score', 10.0)) > 3.0:
+                    return False
+            except Exception:
+                return False
+        return True
+    
     def search_properties(self, query: str, top_k: int = 7) -> List[Dict]:
         """Search for relevant properties using semantic similarity"""
         try:
+            constraints = self._extract_constraints(query)
             # Get embedding for the query
             query_embedding = get_embeddings_batch([query], self.hf_model)[0]
             
             # Search in Pinecone
             results = self.index.query(
                 vector=query_embedding,
-                top_k=top_k,
+                top_k=self.default_top_k,
                 include_metadata=True
             )
+            matches = results.get('matches', [])
+            print(f"[DEBUG] Raw Pinecone matches: {len(matches)}")
             
-            return results['matches']
+            # Lower score threshold for better recall
+            matches = [m for m in matches if m.get('score', 0) >= 0.3]  # Lowered from 0.6
+            print(f"[DEBUG] After score filter: {len(matches)}")
             
+            # post filter by constraints
+            filtered = []
+            for m in matches:
+                md = m.get('metadata', {})
+                if self._metadata_matches(md, constraints):
+                    filtered.append(m)
+            print(f"[DEBUG] After constraint filter: {len(filtered)}")
+            
+            # fallback if too few - return all matches regardless of constraints
+            if len(filtered) < min(top_k, 3):
+                print(f"[DEBUG] Using fallback - returning top matches")
+                filtered = matches[:max(top_k, 3)]
+            
+            return filtered[:top_k]
+         
         except Exception as e:
             print(f"[ERROR] Error searching properties: {e}")
             return []
@@ -425,26 +533,39 @@ class PropertyRAGAgent:
             # Run analytics agent and include as context
             analytics = self.analytics_agent.analyze(query, top_k=7)
             analytics_context = analytics.get('context', '')
+            # sanitize function for currency artifacts
+            def sanitize_text(s: str) -> str:
+                return str(s).replace('[EMOJI]', '').replace('', '£')
             # Prepare context from search results
             context = "Property Information:\n"
             for i, result in enumerate(search_results, 1):
                 metadata = result['metadata']
-                context += f"{i}. {metadata['text_description']}\n"
+                context += f"{i}. {sanitize_text(metadata.get('text_description',''))}\n"
                 context += f"   Similarity Score: {result['score']:.3f}\n\n"
             
             # Create prompt for Gemini
             prompt = f"""
-            Based on the following property information, please answer the user's query in a helpful and informative way.
-            
-            User Query: {query}
-            
-            {context}
-            
-            In addition, here is the analytics context computed directly from the dataset using pandas:
-            {analytics_context}
-            
-            Please provide a comprehensive answer based on the property data above. Include specific details like prices, locations, and property features when relevant.
-            """
+You are Property RAG Assistant. Answer precisely using ONLY the provided contexts. Do not invent data.
+
+User Query:
+{query}
+
+Vector Retrieval (top matches; sanitized):
+{context}
+
+Analytics (pandas-derived, top rows):
+{analytics_context}
+
+Instructions:
+- ALWAYS prioritize analytics results over vector matches for factual data.
+- If analytics provides specific data (like city crime rates), use that data directly.
+- Prefer entries that satisfy user constraints (price caps, bedrooms, location, 'new home', 'low crime').
+- Quote prices with £ and include bedrooms/bathrooms/address when relevant.
+- If analytics has data, present it clearly and confidently.
+- If nothing matches, say so and suggest nearest options (lower score or slightly above price cap).
+- No emojis. No unsupported claims.
+- For crime rate queries, use the analytics data which shows city-level aggregations.
+"""
             
             # Generate response
             response = self.model.generate_content(prompt)
@@ -483,15 +604,15 @@ def main():
     print("=" * 50)
     
     # Step 1: Setup clients
-    pinecone_index = setup_pinecone()
+    pinecone_index = get_pinecone_index()
     if not pinecone_index:
         return
     
-    hf_model = setup_hf_embeddings()
+    hf_model = get_hf_model()
     if not hf_model:
         return
     
-    gemini_model = setup_gemini()
+    gemini_model = get_gemini_model()
     if not gemini_model:
         return
     
@@ -517,7 +638,7 @@ def main():
     
     # Step 4: Create RAG agent
     print("\n[INIT] Creating RAG Agent...")
-    rag_agent = PropertyRAGAgent(pinecone_index, gemini_model)
+    rag_agent = PropertyRAGAgent(pinecone_index=pinecone_index, gemini_model=gemini_model, hf_model=hf_model)
     
     print("[OK] RAG System is ready!")
     
