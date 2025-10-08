@@ -23,17 +23,17 @@ def load_and_inspect_data(filepath):
     
     df = pd.read_csv(filepath)
     
-    print(f"\n📊 Dataset Shape: {df.shape[0]} rows × {df.shape[1]} columns")
-    print(f"\n📋 Column Names and Types:")
+    print(f"\n[INFO] Dataset Shape: {df.shape[0]} rows [EMOJI] {df.shape[1]} columns")
+    print(f"\n[INFO] Column Names and Types:")
     print(df.dtypes)
     
-    print(f"\n🔍 First 5 Rows:")
+    print(f"\n[INFO] First 5 Rows:")
     print(df.head())
     
-    print(f"\n📈 Basic Statistics:")
+    print(f"\n[INFO] Basic Statistics:")
     print(df.describe())
     
-    print(f"\n🔢 Memory Usage:")
+    print(f"\n[INFO] Memory Usage:")
     print(df.memory_usage(deep=True))
     
     return df
@@ -49,7 +49,7 @@ def assess_data_quality(df):
     print("="*80)
     
     # Missing values analysis
-    print("\n🔴 Missing Values Analysis:")
+    print("\n[WARNING] Missing Values Analysis:")
     missing = pd.DataFrame({
         'Column': df.columns,
         'Missing_Count': df.isnull().sum(),
@@ -59,16 +59,16 @@ def assess_data_quality(df):
     print(missing)
     
     # Duplicate analysis
-    print(f"\n🔄 Duplicate Rows: {df.duplicated().sum()}")
+    print(f"\n[INFO] Duplicate Rows: {df.duplicated().sum()}")
     
     # Data type issues
-    print("\n📊 Data Type Analysis:")
+    print("\n[INFO] Data Type Analysis:")
     for col in df.columns:
         unique_count = df[col].nunique()
         print(f"  {col}: {unique_count} unique values")
     
     # Outlier detection for numerical columns
-    print("\n⚠️ Potential Outliers (using IQR method):")
+    print("\n[WARNING] Potential Outliers (using IQR method):")
     numerical_cols = df.select_dtypes(include=[np.number]).columns
     for col in numerical_cols:
         Q1 = df[col].quantile(0.25)
@@ -98,7 +98,10 @@ def clean_and_engineer_features(df):
         df_clean['listing_year'] = df_clean['listing_update_date'].dt.year
         df_clean['listing_month'] = df_clean['listing_update_date'].dt.month
         df_clean['listing_day_of_week'] = df_clean['listing_update_date'].dt.dayofweek
-        df_clean['days_since_update'] = (datetime.now() - df_clean['listing_update_date']).dt.days
+        # Handle timezone issues by ensuring both datetimes are timezone-naive
+        current_time = datetime.now().replace(tzinfo=None)
+        df_clean['listing_update_date'] = df_clean['listing_update_date'].dt.tz_localize(None) if df_clean['listing_update_date'].dt.tz is not None else df_clean['listing_update_date']
+        df_clean['days_since_update'] = (current_time - df_clean['listing_update_date']).dt.days
     
     # Standardize property type
     df_clean['type_standardized'] = df_clean['type'].str.lower().str.strip()
@@ -126,9 +129,9 @@ def clean_and_engineer_features(df):
                                          bins=[0, 3, 6, 10],
                                          labels=['Low Crime', 'Medium Crime', 'High Crime'])
     
-    print(f"✅ Original columns: {len(df.columns)}")
-    print(f"✅ New columns created: {len(df_clean.columns) - len(df.columns)}")
-    print(f"✅ New feature names: {list(set(df_clean.columns) - set(df.columns))}")
+    print(f"[SUCCESS] Original columns: {len(df.columns)}")
+    print(f"[SUCCESS] New columns created: {len(df_clean.columns) - len(df.columns)}")
+    print(f"[SUCCESS] New feature names: {list(set(df_clean.columns) - set(df.columns))}")
     
     return df_clean
 
@@ -151,8 +154,8 @@ def univariate_analysis(df):
     axes[0, 0].set_title('Price Distribution (Histogram)')
     axes[0, 0].set_xlabel('Price')
     axes[0, 0].set_ylabel('Frequency')
-    axes[0, 0].axvline(df['price'].mean(), color='red', linestyle='--', label=f'Mean: £{df["price"].mean():.0f}')
-    axes[0, 0].axvline(df['price'].median(), color='green', linestyle='--', label=f'Median: £{df["price"].median():.0f}')
+    axes[0, 0].axvline(df['price'].mean(), color='red', linestyle='--', label=f'Mean: [EMOJI]{df["price"].mean():.0f}')
+    axes[0, 0].axvline(df['price'].median(), color='green', linestyle='--', label=f'Median: [EMOJI]{df["price"].median():.0f}')
     axes[0, 0].legend()
     
     # Box plot
@@ -174,12 +177,12 @@ def univariate_analysis(df):
     plt.savefig('univariate_price_analysis.png', dpi=300, bbox_inches='tight')
     plt.show()
     
-    print(f"\n💰 Price Statistics:")
-    print(f"  Mean: £{df['price'].mean():.2f}")
-    print(f"  Median: £{df['price'].median():.2f}")
-    print(f"  Std Dev: £{df['price'].std():.2f}")
-    print(f"  Min: £{df['price'].min():.2f}")
-    print(f"  Max: £{df['price'].max():.2f}")
+    print(f"\n[ANALYSIS] Price Statistics:")
+    print(f"  Mean: [EMOJI]{df['price'].mean():.2f}")
+    print(f"  Median: [EMOJI]{df['price'].median():.2f}")
+    print(f"  Std Dev: [EMOJI]{df['price'].std():.2f}")
+    print(f"  Min: [EMOJI]{df['price'].min():.2f}")
+    print(f"  Max: [EMOJI]{df['price'].max():.2f}")
     print(f"  Skewness: {df['price'].skew():.2f}")
     print(f"  Kurtosis: {df['price'].kurtosis():.2f}")
     
@@ -259,7 +262,7 @@ def bivariate_analysis(df):
     plt.savefig('correlation_matrix.png', dpi=300, bbox_inches='tight')
     plt.show()
     
-    print("\n🔗 Correlation with Price:")
+    print("\n[EMOJI] Correlation with Price:")
     print(corr_matrix['price'].sort_values(ascending=False))
 
 # ============================================================================
@@ -309,10 +312,10 @@ def geographical_analysis(df):
     plt.savefig('geographical_analysis.png', dpi=300, bbox_inches='tight')
     plt.show()
     
-    print(f"\n📍 Total Unique Locations: {df['address'].nunique()}")
-    print(f"\n🏆 Top 5 Locations by Property Count:")
+    print(f"\n[EMOJI] Total Unique Locations: {df['address'].nunique()}")
+    print(f"\n[EMOJI] Top 5 Locations by Property Count:")
     print(top_locations.head())
-    print(f"\n💎 Top 5 Most Expensive Locations:")
+    print(f"\n[EMOJI] Top 5 Most Expensive Locations:")
     print(avg_price_location.head())
 
 # ============================================================================
@@ -326,7 +329,7 @@ def temporal_analysis(df):
     print("="*80)
     
     if 'listing_update_date' not in df.columns:
-        print("⚠️ No temporal data available")
+        print("[WARNING] No temporal data available")
         return
     
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
@@ -435,51 +438,51 @@ def rag_specific_insights(df):
     print("="*80)
     
     # Answer common RAG queries
-    print("\n💡 Pre-computed Insights for RAG Queries:\n")
+    print("\n[INSIGHTS] Pre-computed Insights for RAG Queries:\n")
     
     # 1. Average price by bedroom count
-    print("1️⃣ Average Price by Bedroom Count:")
+    print("1. Average Price by Bedroom Count:")
     avg_price_bedrooms = df.groupby('bedrooms')['price'].mean().sort_index()
     for bed, price in avg_price_bedrooms.items():
-        print(f"   {bed} bedroom(s): £{price:.2f}")
+        print(f"   {bed} bedroom(s): [EMOJI]{price:.2f}")
     
     # 2. Properties under budget with conditions
-    print("\n2️⃣ Budget Properties (under £1000) with 2+ bathrooms:")
+    print("\n2. Budget Properties (under [EMOJI]1000) with 2+ bathrooms:")
     budget_props = df[(df['price'] < 1000) & (df['bathrooms'] >= 2)]
     print(f"   Found: {len(budget_props)} properties")
-    print(f"   Average price: £{budget_props['price'].mean():.2f}")
+    print(f"   Average price: [EMOJI]{budget_props['price'].mean():.2f}")
     
     # 3. High crime areas
-    print("\n3️⃣ Areas with Highest Crime:")
+    print("\n3. Areas with Highest Crime:")
     high_crime = df.groupby('address')['crime_score_weight'].mean().sort_values(ascending=False).head(10)
     for location, score in high_crime.items():
         print(f"   {location}: {score:.2f}")
     
     # 4. Studio vs 2-bed comparison
-    print("\n4️⃣ Studio vs 2-Bedroom Comparison:")
+    print("\n4. Studio vs 2-Bedroom Comparison:")
     studio_price = df[df['bedrooms'] == 0]['price'].mean()
     two_bed_price = df[df['bedrooms'] == 2]['price'].mean()
-    print(f"   Studio average: £{studio_price:.2f}")
-    print(f"   2-bedroom average: £{two_bed_price:.2f}")
-    print(f"   Difference: £{two_bed_price - studio_price:.2f} ({((two_bed_price/studio_price)-1)*100:.1f}% more)")
+    print(f"   Studio average: [EMOJI]{studio_price:.2f}")
+    print(f"   2-bedroom average: [EMOJI]{two_bed_price:.2f}")
+    print(f"   Difference: [EMOJI]{two_bed_price - studio_price:.2f} ({((two_bed_price/studio_price)-1)*100:.1f}% more)")
     
     # 5. Best value properties
-    print("\n5️⃣ Best Value (Price per Bedroom) by Property Type:")
+    print("\n5. Best Value (Price per Bedroom) by Property Type:")
     best_value = df.groupby('type_standardized')['price_per_bedroom'].mean().sort_values().head(10)
     for prop_type, value in best_value.items():
-        print(f"   {prop_type}: £{value:.2f} per bedroom")
+        print(f"   {prop_type}: [EMOJI]{value:.2f} per bedroom")
     
     # 6. Flood risk properties
-    print("\n6️⃣ Flood Risk Analysis:")
+    print("\n6. Flood Risk Analysis:")
     flood_count = df['has_flood_risk'].sum()
     print(f"   Properties with flood risk: {flood_count} ({flood_count/len(df)*100:.2f}%)")
     
     # 7. New homes
-    print("\n7️⃣ New Homes:")
+    print("\n7. New Homes:")
     new_homes = df[df['is_new_home'] == True]
     print(f"   New homes: {len(new_homes)} ({len(new_homes)/len(df)*100:.2f}%)")
-    print(f"   Avg price (new): £{new_homes['price'].mean():.2f}")
-    print(f"   Avg price (existing): £{df[df['is_new_home'] == False]['price'].mean():.2f}")
+    print(f"   Avg price (new): [EMOJI]{new_homes['price'].mean():.2f}")
+    print(f"   Avg price (existing): [EMOJI]{df[df['is_new_home'] == False]['price'].mean():.2f}")
     
     # Create summary visualization
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
@@ -489,7 +492,7 @@ def rag_specific_insights(df):
     avg_price_bedrooms.plot(kind='bar', ax=axes[0, 0], color='steelblue')
     axes[0, 0].set_title('Average Price by Bedroom Count')
     axes[0, 0].set_xlabel('Bedrooms')
-    axes[0, 0].set_ylabel('Average Price (£)')
+    axes[0, 0].set_ylabel('Average Price ([EMOJI])')
     axes[0, 0].tick_params(axis='x', rotation=0)
     
     # Top 10 high crime areas
@@ -502,7 +505,7 @@ def rag_specific_insights(df):
     bedroom_categories.plot(kind='bar', ax=axes[1, 0], color='teal')
     axes[1, 0].set_title('Price Comparison by Bedroom Category')
     axes[1, 0].set_xlabel('Category')
-    axes[1, 0].set_ylabel('Average Price (£)')
+    axes[1, 0].set_ylabel('Average Price ([EMOJI])')
     axes[1, 0].tick_params(axis='x', rotation=45)
     
     # Property type distribution
@@ -532,7 +535,7 @@ PROPERTY DATA EDA - COMPREHENSIVE REPORT
 1. DATASET OVERVIEW
    - Total Properties: {len(df):,}
    - Total Features: {len(df.columns)}
-   - Date Range: {df['listing_update_date'].min()} to {df['listing_update_date'].max()}
+   - Date Range: {pd.to_datetime(df['listing_update_date'], errors='coerce').min()} to {pd.to_datetime(df['listing_update_date'], errors='coerce').max()}
    - Memory Usage: {df.memory_usage(deep=True).sum() / 1024**2:.2f} MB
 
 2. DATA QUALITY
@@ -543,10 +546,10 @@ PROPERTY DATA EDA - COMPREHENSIVE REPORT
 
 3. KEY STATISTICS
    Price Analysis:
-   - Mean Price: £{df['price'].mean():.2f}
-   - Median Price: £{df['price'].median():.2f}
-   - Price Range: £{df['price'].min():.2f} - £{df['price'].max():.2f}
-   - Standard Deviation: £{df['price'].std():.2f}
+   - Mean Price: [EMOJI]{df['price'].mean():.2f}
+   - Median Price: [EMOJI]{df['price'].median():.2f}
+   - Price Range: [EMOJI]{df['price'].min():.2f} - [EMOJI]{df['price'].max():.2f}
+   - Standard Deviation: [EMOJI]{df['price'].std():.2f}
    
    Property Characteristics:
    - Avg Bedrooms: {df['bedrooms'].mean():.2f}
@@ -561,17 +564,17 @@ PROPERTY DATA EDA - COMPREHENSIVE REPORT
 4. TOP INSIGHTS FOR RAG APPLICATION
    - Most expensive location: {df.groupby('address')['price'].mean().idxmax()}
    - Safest location (lowest crime): {df.groupby('address')['crime_score_weight'].mean().idxmin()}
-   - Best value property type: {df.groupby('type_standardized')['price_per_bedroom'].mean().idxmin()}
-   - Peak listing month: {df['listing_month'].mode()[0] if 'listing_month' in df.columns else 'N/A'}
+   - Best value property type: {df_clean.groupby('type_standardized')['price_per_bedroom'].mean().idxmin()}
+   - Peak listing month: {df_clean['listing_month'].mode()[0] if 'listing_month' in df_clean.columns else 'N/A'}
 
 5. RECOMMENDATIONS FOR RAG IMPLEMENTATION
-   ✓ Index property descriptions with location, price, bedrooms, bathrooms
-   ✓ Create embeddings for natural language queries about pricing
-   ✓ Store crime score data for safety-related queries
-   ✓ Enable filtering by price range, bedroom count, and location
-   ✓ Implement comparison queries (studio vs multi-bedroom)
-   ✓ Add temporal context for listing freshness
-   ✓ Include flood risk and new home status in metadata
+   [EMOJI] Index property descriptions with location, price, bedrooms, bathrooms
+   [EMOJI] Create embeddings for natural language queries about pricing
+   [EMOJI] Store crime score data for safety-related queries
+   [EMOJI] Enable filtering by price range, bedroom count, and location
+   [EMOJI] Implement comparison queries (studio vs multi-bedroom)
+   [EMOJI] Add temporal context for listing freshness
+   [EMOJI] Include flood risk and new home status in metadata
 
 6. DATA QUALITY ISSUES TO ADDRESS
    {missing_info.to_string() if not missing_info.empty else '   No significant missing values'}
@@ -587,7 +590,7 @@ END OF REPORT
     with open('property_data_eda_report.txt', 'w') as f:
         f.write(report)
     
-    print("\n✅ Report saved to: property_data_eda_report.txt")
+    print("\n[SUCCESS] Report saved to: property_data_eda_report.txt")
 
 # ============================================================================
 # STEP 11: EXPORT CLEANED DATA
@@ -602,7 +605,7 @@ def export_cleaned_data(df_clean):
     # Save full cleaned dataset
     output_path = 'property_data_cleaned.csv'
     df_clean.to_csv(output_path, index=False)
-    print(f"✅ Cleaned dataset saved to: {output_path}")
+    print(f"[SUCCESS] Cleaned dataset saved to: {output_path}")
     
     # Create a summary dataset for quick lookups
     summary_df = df_clean.groupby('address').agg({
@@ -615,7 +618,7 @@ def export_cleaned_data(df_clean):
     
     summary_df.columns = ['_'.join(col).strip() for col in summary_df.columns.values]
     summary_df.to_csv('property_summary_by_location.csv')
-    print(f"✅ Location summary saved to: property_summary_by_location.csv")
+    print(f"[SUCCESS] Location summary saved to: property_summary_by_location.csv")
     
     # Create embeddings-ready dataset
     embeddings_df = df_clean[[
@@ -628,16 +631,16 @@ def export_cleaned_data(df_clean):
     embeddings_df['text_description'] = embeddings_df.apply(
         lambda x: f"{x['property_type_full_description'] if pd.notna(x['property_type_full_description']) else x['type_standardized']} "
                   f"with {x['bedrooms']} bedrooms and {x['bathrooms']} bathrooms in {x['address']}. "
-                  f"Price: £{x['price']}. Crime score: {x['crime_score_weight']}. "
+                  f"Price: [EMOJI]{x['price']}. Crime score: {x['crime_score_weight']}. "
                   f"{'New home. ' if x['is_new_home'] else ''}"
                   f"{'Flood risk area. ' if pd.notna(x['flood_risk']) and x['flood_risk'] != 'None' else ''}",
         axis=1
     )
     
     embeddings_df.to_csv('property_embeddings_ready.csv', index=False)
-    print(f"✅ Embeddings-ready dataset saved to: property_embeddings_ready.csv")
+    print(f"[SUCCESS] Embeddings-ready dataset saved to: property_embeddings_ready.csv")
     
-    print(f"\n📊 Exported Files Summary:")
+    print(f"\n[INFO] Exported Files Summary:")
     print(f"   1. property_data_cleaned.csv - Full cleaned dataset ({len(df_clean)} rows)")
     print(f"   2. property_summary_by_location.csv - Location aggregates ({len(summary_df)} locations)")
     print(f"   3. property_embeddings_ready.csv - Ready for vector embeddings ({len(embeddings_df)} rows)")
@@ -655,13 +658,13 @@ def generate_sample_queries(df):
     queries = {
         "Query 1": {
             "question": "What's the average price of 3-bedroom homes?",
-            "answer": f"£{df[df['bedrooms'] == 3]['price'].mean():.2f}",
+            "answer": f"[EMOJI]{df[df['bedrooms'] == 3]['price'].mean():.2f}",
             "count": len(df[df['bedrooms'] == 3])
         },
         "Query 2": {
-            "question": "Find properties under £1000 with 2+ bathrooms",
+            "question": "Find properties under [EMOJI]1000 with 2+ bathrooms",
             "answer": f"{len(df[(df['price'] < 1000) & (df['bathrooms'] >= 2)])} properties found",
-            "avg_price": f"£{df[(df['price'] < 1000) & (df['bathrooms'] >= 2)]['price'].mean():.2f}"
+            "avg_price": f"[EMOJI]{df[(df['price'] < 1000) & (df['bathrooms'] >= 2)]['price'].mean():.2f}"
         },
         "Query 3": {
             "question": "Which area has the most crime?",
@@ -670,14 +673,14 @@ def generate_sample_queries(df):
         },
         "Query 4": {
             "question": "Compare prices between studio and 2-bed homes",
-            "studio_avg": f"£{df[df['bedrooms'] == 0]['price'].mean():.2f}",
-            "two_bed_avg": f"£{df[df['bedrooms'] == 2]['price'].mean():.2f}",
-            "difference": f"£{df[df['bedrooms'] == 2]['price'].mean() - df[df['bedrooms'] == 0]['price'].mean():.2f}"
+            "studio_avg": f"[EMOJI]{df[df['bedrooms'] == 0]['price'].mean():.2f}",
+            "two_bed_avg": f"[EMOJI]{df[df['bedrooms'] == 2]['price'].mean():.2f}",
+            "difference": f"[EMOJI]{df[df['bedrooms'] == 2]['price'].mean() - df[df['bedrooms'] == 0]['price'].mean():.2f}"
         },
         "Query 5": {
             "question": "What's the most affordable location?",
             "answer": df.groupby('address')['price'].mean().idxmin(),
-            "avg_price": f"£{df.groupby('address')['price'].mean().min():.2f}"
+            "avg_price": f"[EMOJI]{df.groupby('address')['price'].mean().min():.2f}"
         },
         "Query 6": {
             "question": "How many new homes are available?",
@@ -687,16 +690,16 @@ def generate_sample_queries(df):
         "Query 7": {
             "question": "Properties with flood risk in low crime areas?",
             "answer": len(df[(df['has_flood_risk'] == True) & (df['crime_score_weight'] <= 3)]),
-            "avg_price": f"£{df[(df['has_flood_risk'] == True) & (df['crime_score_weight'] <= 3)]['price'].mean():.2f}"
+            "avg_price": f"[EMOJI]{df[(df['has_flood_risk'] == True) & (df['crime_score_weight'] <= 3)]['price'].mean():.2f}"
         },
         "Query 8": {
             "question": "Best value property type (price per bedroom)?",
             "answer": df.groupby('type_standardized')['price_per_bedroom'].mean().idxmin(),
-            "value": f"£{df.groupby('type_standardized')['price_per_bedroom'].mean().min():.2f}/bedroom"
+            "value": f"[EMOJI]{df.groupby('type_standardized')['price_per_bedroom'].mean().min():.2f}/bedroom"
         }
     }
     
-    print("\n🔍 Sample Test Queries with Expected Answers:\n")
+    print("\n[INFO] Sample Test Queries with Expected Answers:\n")
     for key, query in queries.items():
         print(f"\n{key}:")
         for k, v in query.items():
@@ -707,7 +710,7 @@ def generate_sample_queries(df):
     with open('rag_test_queries.json', 'w') as f:
         json.dump(queries, f, indent=2)
     
-    print("\n✅ Test queries saved to: rag_test_queries.json")
+    print("\n[SUCCESS] Test queries saved to: rag_test_queries.json")
 
 # ============================================================================
 # MAIN EXECUTION PIPELINE
@@ -715,9 +718,9 @@ def generate_sample_queries(df):
 
 def main():
     """Execute complete EDA pipeline"""
-    print("\n" + "🏠"*40)
+    print("\n" + "="*40)
     print("PROPERTY DATA - COMPREHENSIVE EDA PIPELINE")
-    print("🏠"*40 + "\n")
+    print("="*40 + "\n")
     
     # File path
     filepath = r"F:\simplyphi\data Science Project\data Science Project\Property_data.csv"
@@ -740,9 +743,9 @@ def main():
         generate_sample_queries(df_clean)
         
         print("\n" + "="*80)
-        print("✅ EDA PIPELINE COMPLETED SUCCESSFULLY!")
+        print("[SUCCESS] EDA PIPELINE COMPLETED SUCCESSFULLY!")
         print("="*80)
-        print("\n📁 Generated Files:")
+        print("\n[EMOJI] Generated Files:")
         print("   1. univariate_price_analysis.png")
         print("   2. rooms_distribution.png")
         print("   3. bivariate_analysis.png")
@@ -757,7 +760,7 @@ def main():
         print("   12. property_data_eda_report.txt")
         print("   13. rag_test_queries.json")
         
-        print("\n🚀 Next Steps for RAG Application:")
+        print("\n[EMOJI] Next Steps for RAG Application:")
         print("   1. Use 'property_embeddings_ready.csv' for creating vector embeddings")
         print("   2. Store embeddings in your chosen vector DB (Pinecone/Weaviate/ChromaDB)")
         print("   3. Use 'rag_test_queries.json' for testing your RAG system")
@@ -767,7 +770,7 @@ def main():
         return df_clean
         
     except Exception as e:
-        print(f"\n❌ Error occurred: {str(e)}")
+        print(f"\n[ERROR] Error occurred: {str(e)}")
         import traceback
         traceback.print_exc()
 

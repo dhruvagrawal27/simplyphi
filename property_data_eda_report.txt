@@ -1,0 +1,64 @@
+
+================================================================================
+PROPERTY DATA EDA - COMPREHENSIVE REPORT
+================================================================================
+
+1. DATASET OVERVIEW
+   - Total Properties: 147,666
+   - Total Features: 11
+   - Date Range: 2008-01-06 03:22:53+00:00 to 2025-09-09 19:42:03+00:00
+   - Memory Usage: 53.10 MB
+
+2. DATA QUALITY
+   - Missing Values: 161229 (9.93%)
+   - Duplicate Rows: 372
+   - Unique Locations: 358
+   - Unique Property Types: 100
+
+3. KEY STATISTICS
+   Price Analysis:
+   - Mean Price: [EMOJI]2996.82
+   - Median Price: [EMOJI]1500.00
+   - Price Range: [EMOJI]0.00 - [EMOJI]84489939.00
+   - Standard Deviation: [EMOJI]220587.73
+   
+   Property Characteristics:
+   - Avg Bedrooms: 2.17
+   - Avg Bathrooms: 1.43
+   - Most Common Type: Flat
+   
+   Safety & Risk:
+   - Avg Crime Score: 5.40
+   - Properties with Flood Risk: 14646 (9.92%)
+   - New Homes: 4818 (3.26%)
+
+4. TOP INSIGHTS FOR RAG APPLICATION
+   - Most expensive location: Sefton
+   - Safest location (lowest crime): Preston
+   - Best value property type: light_industrial
+   - Peak listing month: 8.0
+
+5. RECOMMENDATIONS FOR RAG IMPLEMENTATION
+   [EMOJI] Index property descriptions with location, price, bedrooms, bathrooms
+   [EMOJI] Create embeddings for natural language queries about pricing
+   [EMOJI] Store crime score data for safety-related queries
+   [EMOJI] Enable filtering by price range, bedroom count, and location
+   [EMOJI] Implement comparison queries (studio vs multi-bedroom)
+   [EMOJI] Add temporal context for listing freshness
+   [EMOJI] Include flood risk and new home status in metadata
+
+6. DATA QUALITY ISSUES TO ADDRESS
+                                                           Column  Missing_Count  Missing_Percentage
+flood_risk                                          flood_risk         133020               90.08
+property_type_full_description  property_type_full_description          17470               11.83
+bathrooms                                            bathrooms           7025                4.76
+type                                                      type           1069                0.72
+address                                                address            968                0.66
+crime_score_weight                          crime_score_weight            861                0.58
+laua                                                      laua            809                0.55
+listing_update_date                        listing_update_date              7                0.00
+
+================================================================================
+END OF REPORT
+================================================================================
+    

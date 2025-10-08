@@ -1,0 +1,43 @@
+{
+  "Query 1": {
+    "question": "What's the average price of 3-bedroom homes?",
+    "answer": "[EMOJI]2631.77",
+    "count": 31329
+  },
+  "Query 2": {
+    "question": "Find properties under [EMOJI]1000 with 2+ bathrooms",
+    "answer": "2386 properties found",
+    "avg_price": "[EMOJI]833.74"
+  },
+  "Query 3": {
+    "question": "Which area has the most crime?",
+    "answer": "Aberdeen City",
+    "crime_score": "10.00"
+  },
+  "Query 4": {
+    "question": "Compare prices between studio and 2-bed homes",
+    "studio_avg": "[EMOJI]1395.26",
+    "two_bed_avg": "[EMOJI]3540.20",
+    "difference": "[EMOJI]2144.94"
+  },
+  "Query 5": {
+    "question": "What's the most affordable location?",
+    "answer": "Scarborough",
+    "avg_price": "[EMOJI]499.00"
+  },
+  "Query 6": {
+    "question": "How many new homes are available?",
+    "answer": "4818 new homes",
+    "percentage": "3.26%"
+  },
+  "Query 7": {
+    "question": "Properties with flood risk in low crime areas?",
+    "answer": 6433,
+    "avg_price": "[EMOJI]2089.47"
+  },
+  "Query 8": {
+    "question": "Best value property type (price per bedroom)?",
+    "answer": "light_industrial",
+    "value": "[EMOJI]175.00/bedroom"
+  }
+}
