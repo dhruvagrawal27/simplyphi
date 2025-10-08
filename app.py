@@ -384,6 +384,9 @@ HTML = """
       const btn = document.getElementById('ask');
       const answerDiv = document.getElementById('answer');
       
+      // Reset all toggle panels to default state
+      resetTogglePanels();
+      
       // Show loading state
       btn.disabled = true;
       btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Thinking...';
@@ -403,6 +406,7 @@ HTML = """
         const responseTime = ((endTime - startTime) / 1000).toFixed(2);
         
         if (j.error) {
+          answerDiv.className = 'answer';
           answerDiv.innerHTML = `<div style="color: var(--danger); padding: 20px; text-align: center;">
             <i class="fas fa-exclamation-triangle"></i><br>Error: ${j.error}
           </div>`;
@@ -416,7 +420,7 @@ HTML = """
             <div class="markdown">${md(j.answer)}</div>
           `;
           
-          // Update toggle content
+          // Update toggle content with new data
           document.getElementById('pandas-code-content').textContent = j.analytics.generated_code || 'No pandas code generated';
           document.getElementById('pandas-output-content').textContent = JSON.stringify(j.analytics.rows || [], null, 2);
           document.getElementById('vector-matches-content').textContent = JSON.stringify(j.matches || [], null, 2);
@@ -430,6 +434,21 @@ HTML = """
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-search"></i> Ask AI';
       }
+    }
+    
+    // Function to reset toggle panels
+    function resetTogglePanels() {
+      // Reset all toggle buttons to inactive state
+      const allToggles = document.querySelectorAll('.toggle-btn');
+      const allContents = document.querySelectorAll('.toggle-content');
+      
+      allToggles.forEach(t => t.classList.remove('active'));
+      allContents.forEach(c => c.classList.remove('active'));
+      
+      // Reset content to default messages
+      document.getElementById('pandas-code-content').textContent = 'Click "Pandas Code" to see the AI-generated pandas query...';
+      document.getElementById('pandas-output-content').textContent = 'Click "Analytics Data" to see the pandas output...';
+      document.getElementById('vector-matches-content').textContent = 'Click "Vector Matches" to see semantic search results...';
     }
     
     // Event listeners
@@ -465,30 +484,61 @@ def api_ask():
         print(f"[DEBUG] Response generated")
         
         # Convert to JSON-serializable format
+        def clean_for_json(obj):
+            """Recursively clean data for JSON serialization"""
+            if obj is None:
+                return None
+            elif isinstance(obj, (list, tuple)):
+                return [clean_for_json(item) for item in obj]
+            elif isinstance(obj, dict):
+                return {k: clean_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, (int, float)):
+                try:
+                    if pd.isna(obj) or str(obj) == 'nan' or str(obj) == 'inf' or str(obj) == '-inf':
+                        return None
+                    return obj
+                except:
+                    return None
+            elif isinstance(obj, str):
+                return obj
+            elif isinstance(obj, bool):
+                return obj
+            elif hasattr(obj, 'dtype'):  # numpy/pandas arrays
+                try:
+                    if hasattr(obj, 'item'):  # scalar
+                        return clean_for_json(obj.item())
+                    else:  # array
+                        return [clean_for_json(item) for item in obj.tolist()]
+                except:
+                    return str(obj)
+            else:
+                try:
+                    # Check if it's a pandas/numpy scalar
+                    if hasattr(obj, 'item'):
+                        return clean_for_json(obj.item())
+                    # Check for NaN using string representation
+                    if str(obj).lower() in ['nan', 'inf', '-inf', 'none']:
+                        return None
+                    return str(obj)
+                except:
+                    return None
+        
+        # Clean analytics data
+        analytics_clean = clean_for_json(analytics)
         analytics_serializable = {
-            "context": str(analytics.get('context', '')),
-            "generated_code": str(analytics.get('generated_code', '')),
-            "rows": analytics.get('rows', [])
+            "context": str(analytics_clean.get('context', '')),
+            "generated_code": str(analytics_clean.get('generated_code', '')),
+            "rows": analytics_clean.get('rows', [])
         }
         
+        # Clean matches data
         matches_serializable = []
         for match in matches:
-            # Safely convert metadata values
-            safe_metadata = {}
-            for k, v in match.get('metadata', {}).items():
-                try:
-                    if pd.isna(v) or v is None:
-                        safe_metadata[k] = ''
-                    elif isinstance(v, (int, float, str, bool)):
-                        safe_metadata[k] = str(v)
-                    else:
-                        safe_metadata[k] = str(v)
-                except Exception:
-                    safe_metadata[k] = ''
+            safe_metadata = clean_for_json(match.get('metadata', {}))
             
             matches_serializable.append({
                 "id": str(match.get('id', '')),
-                "score": float(match.get('score', 0)),
+                "score": float(match.get('score', 0)) if not pd.isna(match.get('score', 0)) else 0.0,
                 "metadata": safe_metadata
             })
         
