@@ -95,23 +95,26 @@ class DataAnalyticsAgent:
 
         schema_preview = "\n".join([f"- {c}: {t}" for c, t in self.schema.items()][:40])
         prompt = f"""
-You are a senior pandas engineer. Convert the user's question into SAFE pandas code over an existing DataFrame named df.
-Constraints:
-- Do not import or read files. Use only df, pandas (pd), numpy (np).
-- Guard every column access with existence checks (e.g., if 'price' in df.columns: ...).
-- If needed, create days_since_update from listing_update_date using pd.to_datetime and now.
-- Prefer simple boolean filtering and sort_values; avoid eval/query strings.
-- Always build a DataFrame 'result' with at most {top_k} rows.
-- If required columns are missing, return an empty DataFrame with reasonable columns.
-- Columns commonly available: type_standardized, property_type_full_description, bedrooms, bathrooms, price, address, crime_score_weight, is_new_home, listing_update_date, price_category.
+You are a senior pandas engineer. Convert the user's question into CONCISE pandas code over an existing DataFrame named df.
 
-Schema preview:
-{schema_preview}
+REQUIREMENTS:
+- Return ONLY the essential pandas code (2-3 lines max)
+- Use df, pandas (pd), numpy (np) only
+- Check column existence: if 'col' in df.columns
+- Build DataFrame 'result' with max {top_k} rows
+- NO comments, NO explanations, NO test data
 
-User question:
-{nl_query}
+FILTERING RULES:
+- Location: df['address'].str.contains('location', case=False, na=False)
+- Counts: Use == for exact match, >= for "or more"
+- Price: < for "under", > for "over", <= for "up to"
+- Sort: ascending=True for "cheapest", descending=True for "expensive"
 
-Return ONLY Python code that sets a variable named result (no backticks, no prose).
+Available columns: {', '.join(list(self.schema.keys())[:10])}
+
+Query: {nl_query}
+
+Code:
         """
 
         try:
@@ -130,22 +133,71 @@ Return ONLY Python code that sets a variable named result (no backticks, no pros
         local_env['df'] = df
         local_env['result'] = pd.DataFrame()
 
-        # Safety: strip forbidden keywords
+        # Safety: strip forbidden keywords and clean up code
         forbidden = ['os.', 'sys.', 'open(', 'subprocess', 'eval(', 'exec(', 'import ', '__', 'pickle', 'pathlib']
         safe_code = code
+        
+        # Remove forbidden keywords
         for bad in forbidden:
             safe_code = safe_code.replace(bad, '# removed ')
+        
+        # Clean up excessive comments and explanations
+        lines = safe_code.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines, comments, and explanations
+            if (line and 
+                not line.startswith('#') and 
+                not line.startswith('"""') and 
+                not line.startswith("'''") and
+                not line.startswith('try:') and
+                not line.startswith('except') and
+                not 'Initialize result' in line and
+                not 'Define required' in line and
+                not 'Check if all required' in line and
+                not 'This part is for testing' in line):
+                cleaned_lines.append(line)
+        
+        safe_code = '\n'.join(cleaned_lines)
 
         try:
             exec(safe_code, {}, local_env)
         except Exception:
-            # fallback: simple sort by days_since_update or price
+            # fallback: try to apply basic filters based on query
             tmp = df.copy()
             cols = [c for c in ['type_standardized','property_type_full_description','bedrooms','bathrooms','price','address','is_new_home','listing_update_date','days_since_update','price_category'] if c in tmp.columns]
-            if 'days_since_update' in tmp.columns:
+            
+            # Apply basic filters based on query keywords
+            query_lower = nl_query.lower()
+            
+            # Filter by bathrooms if mentioned
+            if 'bathroom' in query_lower and 'bathrooms' in tmp.columns:
+                if '2' in query_lower:
+                    tmp = tmp[tmp['bathrooms'] == 2]
+                elif '1' in query_lower:
+                    tmp = tmp[tmp['bathrooms'] == 1]
+                elif '3' in query_lower:
+                    tmp = tmp[tmp['bathrooms'] == 3]
+            
+            # Filter by location if mentioned
+            if 'london' in query_lower and 'address' in tmp.columns:
+                tmp = tmp[tmp['address'].str.contains('london', case=False, na=False)]
+            elif 'birmingham' in query_lower and 'address' in tmp.columns:
+                tmp = tmp[tmp['address'].str.contains('birmingham', case=False, na=False)]
+            elif 'manchester' in query_lower and 'address' in tmp.columns:
+                tmp = tmp[tmp['address'].str.contains('manchester', case=False, na=False)]
+            
+            # Sort by price for cheapest queries
+            if 'cheapest' in query_lower and 'price' in tmp.columns:
+                tmp = tmp.sort_values('price', ascending=True)
+            elif 'expensive' in query_lower and 'price' in tmp.columns:
+                tmp = tmp.sort_values('price', ascending=False)
+            elif 'days_since_update' in tmp.columns:
                 tmp = tmp.sort_values('days_since_update', ascending=True)
             elif 'price' in tmp.columns:
                 tmp = tmp.sort_values('price', ascending=True)
+            
             local_env['result'] = tmp[cols].head(top_k)
 
         result_df = local_env.get('result')
@@ -154,17 +206,23 @@ Return ONLY Python code that sets a variable named result (no backticks, no pros
         # enforce top_k
         result_df = result_df.head(top_k)
 
-        # Build context
+        # Build concise context
         lines = []
         for _, row in result_df.iterrows():
             desc = str(row.get('property_type_full_description', '')) or str(row.get('type_standardized', ''))
-            line = f"- {desc} | bed: {row.get('bedrooms','')} | bath: {row.get('bathrooms','')} | price: {row.get('price','')} | addr: {row.get('address','')}"
-            if 'days_since_update' in result_df.columns and pd.notna(row.get('days_since_update', None)):
-                line += f" | days_since_update: {row.get('days_since_update')}"
-            if 'is_new_home' in result_df.columns:
-                line += f" | new: {row.get('is_new_home')}"
+            bed = row.get('bedrooms', '')
+            bath = row.get('bathrooms', '')
+            price = row.get('price', '')
+            addr = row.get('address', '')
+            new_home = row.get('is_new_home', False)
+            
+            # Format: Property Type - £Price - Address (X bed, X bath) [New]
+            line = f"{desc} - £{price} - {addr} ({bed} bed, {bath} bath)"
+            if new_home:
+                line += " [New]"
             lines.append(line)
-        context = "Analytics Top Results (pandas via Gemini):\n" + "\n".join(lines) if lines else "No matching rows found."
+        
+        context = "\n".join(lines) if lines else "No matching properties found."
         return {"context": context, "rows": result_df.to_dict(orient='records'), "generated_code": safe_code}
 
 def setup_pinecone():
@@ -545,26 +603,20 @@ class PropertyRAGAgent:
             
             # Create prompt for Gemini
             prompt = f"""
-You are Property RAG Assistant. Answer precisely using ONLY the provided contexts. Do not invent data.
+You are Property RAG Assistant. Provide concise, helpful responses about properties.
 
-User Query:
-{query}
+User Query: {query}
 
-Vector Retrieval (top matches; sanitized):
-{context}
-
-Analytics (pandas-derived, top rows):
+Available Data:
 {analytics_context}
 
 Instructions:
-- ALWAYS prioritize analytics results over vector matches for factual data.
-- If analytics provides specific data (like city crime rates), use that data directly.
-- Prefer entries that satisfy user constraints (price caps, bedrooms, location, 'new home', 'low crime').
-- Quote prices with £ and include bedrooms/bathrooms/address when relevant.
-- If analytics has data, present it clearly and confidently.
-- If nothing matches, say so and suggest nearest options (lower score or slightly above price cap).
-- No emojis. No unsupported claims.
-- For crime rate queries, use the analytics data which shows city-level aggregations.
+- Give a brief 2-3 sentence answer
+- List 3-4 best properties with: type, bedrooms, bathrooms, price, address
+- Use format: "Property Type - £X - Address (X bed, X bath)"
+- Prioritize analytics data over vector matches
+- No duplicate information or verbose descriptions
+- Be direct and helpful
 """
             
             # Generate response
