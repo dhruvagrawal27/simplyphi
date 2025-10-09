@@ -4,4 +4,9 @@ pinecone>=3.0.0
 google-generativeai>=0.3.0
 scikit-learn>=1.1.0
 sentence-transformers>=3.0.0
+openai>=1.45.0
+torch>=2.2.0
+python-dotenv>=1.0.1
+langchain>=0.2.10
+langchain-openai>=0.1.21
 

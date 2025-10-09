@@ -13,16 +13,21 @@ Date: 2024
 """
 
 import os
+from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import json
 import time
 from datetime import datetime
 
-# API Keys (Store securely in production)
-PINECONE_API_KEY = "pcsk_5YzRdG_Gbi5jtvXU1auarZuE5cAWkW4tTCYcVvcjzuTfG2PRxTrUgnkfhEUTBYE3DT3uYe"
-GEMINI_API_KEY = "AIzaSyAwNwDXYoAo7m2SeaRUAmluHb5Z8e5IG5I"
+# Load .env
+load_dotenv()
+
+# API Keys
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Configuration
 PINECONE_INDEX_NAME = "property-data-rag"
@@ -33,6 +38,7 @@ BATCH_SIZE = 250  # Process embeddings in batches
 _CACHED_PINECONE_INDEX = None
 _CACHED_HF_MODEL = None
 _CACHED_GEMINI_MODEL = None
+_CACHED_OPENAI_CLIENT = None
 
 def safe_int(value) -> int:
     try:
@@ -277,6 +283,140 @@ Code:
         context = "\n".join(lines) if lines else "No matching data found."
         return {"context": context, "rows": result_df.to_dict(orient='records'), "generated_code": safe_code}
 
+class ChatGPTAnalyticsAgent:
+    """Analytics agent using OpenAI (gpt-4o-mini) to generate pandas code and execute safely."""
+
+    def __init__(self, analytics_df: pd.DataFrame):
+        self.df = analytics_df.copy()
+        self.schema = {col: str(self.df[col].dtype) for col in self.df.columns}
+
+    def _compute_days_since_update_inline(self, df: pd.DataFrame) -> pd.DataFrame:
+        if 'listing_update_date' in df.columns:
+            now = pd.Timestamp.now(tz=None)
+            df['listing_update_date'] = pd.to_datetime(df['listing_update_date'], errors='coerce')
+            df['days_since_update'] = (now - df['listing_update_date']).dt.days
+            df['days_since_update'] = df['days_since_update'].fillna(999)
+        return df
+
+    def analyze(self, nl_query: str, top_k: int = 7) -> Dict[str, Any]:
+        if self.df.empty:
+            return {"context": "No analytics data available.", "rows": [], "generated_code": ""}
+
+        # Build prompt
+        schema_preview = "\n".join([f"- {c}: {t}" for c, t in self.schema.items()][:40])
+        prompt = f"""
+You are a senior pandas engineer. Convert the user's question into CONCISE pandas code over an existing DataFrame named df.
+
+REQUIREMENTS:
+- Return ONLY the essential pandas code (2-3 lines max)
+- Use df, pandas (pd), numpy (np) only
+- Check column existence: if 'col' in df.columns
+- Build DataFrame 'result' with max {top_k} rows
+- NO comments, NO explanations, NO test data
+
+FILTERING RULES:
+- Location: df['address'].str.contains('location', case=False, na=False)
+- Counts: Use == for exact match, >= for "or more"
+- Price: < for "under", > for "over", <= for "up to"
+- Sort: ascending=True for "cheapest", descending=True for "expensive"
+- Crime queries: Use df.groupby('address')['crime_score_weight'].mean() for city-level analysis
+
+Available columns: {', '.join(list(self.schema.keys())[:15])}
+
+Query: {nl_query}
+
+Code:
+"""
+
+        # Call OpenAI (primary)
+        code = ""
+        try:
+            from openai import OpenAI
+            client = get_openai_client()
+            if client is not None:
+                completion = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You only output python pandas code. No explanations."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,
+                    max_tokens=300
+                )
+                code = (completion.choices[0].message.content or "").strip()
+        except Exception:
+            code = ""
+
+        # LangChain fallback if no code
+        if not code:
+            try:
+                from langchain_openai import ChatOpenAI
+                llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, openai_api_key=OPENAI_API_KEY)
+                code = (llm.invoke(prompt).content or "").strip()
+            except Exception:
+                code = ""
+
+        # Safe execution environment
+        local_env: Dict[str, Any] = {}
+        df = self.df.copy()
+        df = self._compute_days_since_update_inline(df)
+        local_env['pd'] = pd
+        local_env['np'] = np
+        local_env['df'] = df
+        local_env['result'] = pd.DataFrame()
+
+        forbidden = ['os.', 'sys.', 'open(', 'subprocess', 'eval(', 'exec(', 'import ', '__', 'pickle', 'pathlib']
+        safe_code = code
+        for bad in forbidden:
+            safe_code = safe_code.replace(bad, '# removed ')
+
+        lines = safe_code.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            line = line.strip()
+            if (line and 
+                not line.startswith('#') and 
+                not line.startswith('"""') and 
+                not line.startswith("'''") and
+                '```' not in line):
+                cleaned_lines.append(line)
+        safe_code = '\n'.join(cleaned_lines)
+
+        try:
+            exec(safe_code, {}, local_env)
+        except Exception:
+            # fallback heuristic mirroring DataAnalyticsAgent basics
+            tmp = df.copy()
+            cols = [c for c in ['type_standardized','property_type_full_description','bedrooms','bathrooms','price','address','is_new_home','listing_update_date','days_since_update','price_category'] if c in tmp.columns]
+            query_lower = nl_query.lower()
+            if 'london' in query_lower and 'address' in tmp.columns:
+                tmp = tmp[tmp['address'].str.contains('london', case=False, na=False)]
+            if 'cheapest' in query_lower and 'price' in tmp.columns:
+                tmp = tmp.sort_values('price', ascending=True)
+            elif 'expensive' in query_lower and 'price' in tmp.columns:
+                tmp = tmp.sort_values('price', ascending=False)
+            local_env['result'] = tmp[cols].head(top_k)
+
+        result_df = local_env.get('result')
+        if not isinstance(result_df, pd.DataFrame):
+            result_df = pd.DataFrame()
+        result_df = result_df.head(top_k)
+
+        lines = []
+        for _, row in result_df.iterrows():
+            desc = str(row.get('property_type_full_description', '')) or str(row.get('type_standardized', ''))
+            bed = row.get('bedrooms', '')
+            bath = row.get('bathrooms', '')
+            price = row.get('price', '')
+            addr = row.get('address', '')
+            new_home = row.get('is_new_home', False)
+            line = f"{desc} - £{price} - {addr} ({bed} bed, {bath} bath)"
+            if new_home:
+                line += " [New]"
+            lines.append(line)
+        context = "\n".join(lines) if lines else "No matching data found."
+        return {"context": context, "rows": result_df.to_dict(orient='records'), "generated_code": safe_code}
+
 def setup_pinecone():
     """Initialize Pinecone client and create index"""
     try:
@@ -285,6 +425,9 @@ def setup_pinecone():
         print("[INIT] Setting up Pinecone...")
         
         # Initialize Pinecone
+        if not PINECONE_API_KEY:
+            print("[ERROR] Missing PINECONE_API_KEY")
+            return None
         pc = Pinecone(api_key=PINECONE_API_KEY)
         
         # Check if index already exists
@@ -404,6 +547,9 @@ def setup_gemini():
         import google.generativeai as genai
         
         print("[INIT] Setting up Gemini client...")
+        if not GEMINI_API_KEY:
+            print("[ERROR] Missing GEMINI_API_KEY")
+            return None
         genai.configure(api_key=GEMINI_API_KEY)
         
         # Test the connection
@@ -539,7 +685,9 @@ class PropertyRAGAgent:
         self.index = pinecone_index or get_pinecone_index()
         self.model = gemini_model or get_gemini_model()
         self.hf_model = hf_model or get_hf_model()
-        self.analytics_agent = DataAnalyticsAgent(load_analytics_data())
+        analytics_df = load_analytics_data()
+        self.analytics_agent = DataAnalyticsAgent(analytics_df)
+        self.chatgpt_analytics_agent = ChatGPTAnalyticsAgent(analytics_df)
         self.vector_score_threshold = 0.6
         self.default_top_k = 15
 
@@ -649,9 +797,11 @@ class PropertyRAGAgent:
     def generate_response(self, query: str, search_results: List[Dict]) -> str:
         """Generate response using Gemini based on retrieved properties"""
         try:
-            # Run analytics agent and include as context
-            analytics = self.analytics_agent.analyze(query, top_k=7)
-            analytics_context = analytics.get('context', '')
+            # Backward-compat: if called without pre-analysis, run Gemini-only
+            analytics_gemini = self.analytics_agent.analyze(query, top_k=7)
+            analytics_chatgpt = self.chatgpt_analytics_agent.analyze(query, top_k=7)
+            analytics_context = analytics_gemini.get('context', '')
+            analytics_context_chatgpt = analytics_chatgpt.get('context', '')
             # sanitize function for currency artifacts
             def sanitize_text(s: str) -> str:
                 return str(s).replace('[EMOJI]', '').replace('', '£')
@@ -669,7 +819,7 @@ You are Property RAG Assistant. Answer the user's question using the provided da
 User Query: {query}
 
 Available Data:
-{analytics_context}
+Gemini Analytics:\n{analytics_context}\n\nChatGPT Analytics:\n{analytics_context_chatgpt}
 
 Instructions:
 - Answer the question directly using the provided data
@@ -687,6 +837,116 @@ Instructions:
         except Exception as e:
             print(f"[ERROR] Error generating response: {e}")
             return "I'm sorry, I encountered an error while processing your request."
+
+    def analyze_both(self, query: str, top_k: int = 7) -> Dict[str, Any]:
+        """Run both Gemini and ChatGPT analytics and return both results."""
+        try:
+            # Run sequentially here; callers may parallelize at higher level
+            gem = self.analytics_agent.analyze(query, top_k=top_k)
+            chg = self.chatgpt_analytics_agent.analyze(query, top_k=top_k)
+            return {"gemini": gem, "chatgpt": chg}
+        except Exception as e:
+            print(f"[ERROR] analyze_both failed: {e}")
+            return {"gemini": {"context": "", "rows": [], "generated_code": ""},
+                    "chatgpt": {"context": "", "rows": [], "generated_code": ""}}
+
+    def generate_response_with_context(self, query: str, search_results: List[Dict],
+                                       analytics_gemini: Dict[str, Any], analytics_chatgpt: Dict[str, Any]) -> str:
+        """Generate response using provided analytics contexts from both engines."""
+        try:
+            analytics_context = analytics_gemini.get('context', '') if analytics_gemini else ''
+            analytics_context_chatgpt = analytics_chatgpt.get('context', '') if analytics_chatgpt else ''
+
+            def sanitize_text(s: str) -> str:
+                return str(s).replace('[EMOJI]', '').replace('', '£')
+
+            context = "Property Information:\n"
+            for i, result in enumerate(search_results, 1):
+                metadata = result['metadata']
+                context += f"{i}. {sanitize_text(metadata.get('text_description',''))}\n"
+                context += f"   Similarity Score: {result['score']:.3f}\n\n"
+
+            prompt = f"""
+You are Property RAG Assistant. Answer the user's question using the provided data.
+
+User Query: {query}
+
+Available Data:
+Gemini Analytics:\n{analytics_context}\n\nChatGPT Analytics:\n{analytics_context_chatgpt}
+
+{context}
+
+Instructions:
+- Answer the question directly using the provided data
+- If the data shows crime scores, use them to answer crime-related questions
+- If the data shows properties, list them with: type, bedrooms, bathrooms, price, address
+- Use format: "Property Type - £X - Address (X bed, X bath)"
+- Be confident and helpful - the data is accurate
+- Don't say "data not available" if data is provided
+"""
+
+            # Prefer OpenAI for final composition to avoid gRPC stalls
+            try:
+                client = get_openai_client()
+            except Exception:
+                client = None
+
+            if client is not None:
+                try:
+                    completion = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "You are Property RAG Assistant. Use given data to answer succinctly."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.2,
+                        max_tokens=700
+                    )
+                    return (completion.choices[0].message.content or "").strip()
+                except Exception:
+                    pass
+
+            # Fallback to Gemini if OpenAI not available
+            response = self.model.generate_content(prompt)
+            return (getattr(response, 'text', None) or str(response))
+        except Exception as e:
+            print(f"[ERROR] Error generating response_with_context: {e}")
+            return "I'm sorry, I encountered an error while processing your request."
+
+# OpenAI setup helpers
+def setup_openai() -> Optional[object]:
+    try:
+        from openai import OpenAI
+        if not OPENAI_API_KEY:
+            print("[ERROR] OPENAI_API_KEY is not set")
+            return None
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        # quick smoke test
+        try:
+            client.models.list()
+        except Exception:
+            pass
+        print("[OK] OpenAI client ready!")
+        return client
+    except ImportError:
+        print("[ERROR] openai package not installed. Installing...")
+        os.system("pip install openai>=1.45.0")
+        try:
+            from openai import OpenAI  # noqa: F401
+            return setup_openai()
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize OpenAI after install: {e}")
+            return None
+    except Exception as e:
+        print(f"[ERROR] Error setting up OpenAI: {e}")
+        return None
+
+def get_openai_client():
+    global _CACHED_OPENAI_CLIENT
+    if _CACHED_OPENAI_CLIENT is not None:
+        return _CACHED_OPENAI_CLIENT
+    _CACHED_OPENAI_CLIENT = setup_openai()
+    return _CACHED_OPENAI_CLIENT
     
     def chat(self, query: str) -> str:
         """Main chat function that combines search and generation"""

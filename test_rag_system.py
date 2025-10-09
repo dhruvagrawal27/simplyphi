@@ -43,20 +43,30 @@ def test_rag_system():
             "Properties in London under £1500"
         ]
         
-        print("[STEP 3] Testing queries...")
+        print("[STEP 3] Testing queries (Gemini + ChatGPT analytics in parallel)...")
         for i, query in enumerate(test_queries, 1):
             print(f"\n[QUERY] Test Query {i}: {query}")
             try:
-                # Run analytics only to show context in test
-                analytics = rag_agent.analytics_agent.analyze(query, top_k=7)
-                print("[ANALYTICS CONTEXT]\n" + analytics.get('context',''))
-                gen_code = analytics.get('generated_code','')
-                if gen_code:
-                    print("\n[GENERATED PANDAS CODE]\n" + gen_code)
-                # Full RAG response
-                response = rag_agent.chat(query)
+                # Run both analytics
+                both = rag_agent.analyze_both(query, top_k=7)
+                gem = both.get('gemini', {})
+                chg = both.get('chatgpt', {})
+
+                print("[ANALYTICS CONTEXT - GEMINI]\n" + (gem.get('context','') or ''))
+                if gem.get('generated_code'):
+                    print("\n[GENERATED PANDAS CODE - GEMINI]\n" + gem.get('generated_code',''))
+
+                print("\n[ANALYTICS CONTEXT - CHATGPT]\n" + (chg.get('context','') or ''))
+                if chg.get('generated_code'):
+                    print("\n[GENERATED PANDAS CODE - CHATGPT]\n" + chg.get('generated_code',''))
+
+                # Vector matches
+                matches = rag_agent.search_properties(query, top_k=5)
+
+                # Full RAG response using both analytics contexts
+                response = rag_agent.generate_response_with_context(query, matches, gem, chg)
                 print(f"[OK] Response generated successfully")
-                print(f"[PREVIEW] {response}...")
+                print(f"[PREVIEW] {response[:500]}...")
             except Exception as e:
                 print(f"[ERROR] Error with query {i}: {e}")
                 return False

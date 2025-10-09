@@ -262,3 +262,36 @@ For support and questions:
 **Built with ❤️ for the property industry**
 
 *Experience the future of property search with AI-powered insights!*
+
+---
+
+## 🧩 Multimodal Analytics (Gemini + ChatGPT)
+
+This app now runs analytics via two LLMs in parallel and composes the final answer using OpenAI (with Gemini fallback):
+
+- Gemini generates pandas code and executes it over the analytics DataFrame
+- ChatGPT (gpt-4o-mini) generates pandas code and executes it over the same DataFrame
+- Pinecone vector search contributes semantic property matches
+- Final answer is composed by OpenAI first; if unavailable, Gemini is used
+
+### Frontend Toggles
+
+In the results panel, use the new toggles to inspect each source:
+
+- Gemini Code: Gemini-generated pandas code
+- ChatGPT Code: ChatGPT-generated pandas code
+- Gemini Data: Rows returned by executing Gemini’s code
+- ChatGPT Data: Rows returned by executing ChatGPT’s code
+- Vector Matches: Retrieved Pinecone matches with metadata
+
+### .env Configuration
+
+Create a `.env` file in the project root with your keys:
+
+```bash
+PINECONE_API_KEY=your_pinecone_key
+GEMINI_API_KEY=your_gemini_key
+OPENAI_API_KEY=your_openai_key
+```
+
+The backend loads these via `python-dotenv`.

@@ -276,13 +276,21 @@ HTML = """
         <!-- Toggle Panel -->
         <div class="toggle-panel">
           <div class="toggle-buttons">
-            <div class="toggle-btn" data-target="#pandas-code">
+            <div class="toggle-btn" data-target="#gemini-code">
               <i class="fas fa-code"></i>
-              <span>Pandas Code</span>
+              <span>Gemini Code</span>
             </div>
-            <div class="toggle-btn" data-target="#pandas-output">
+            <div class="toggle-btn" data-target="#chatgpt-code">
+              <i class="fas fa-code"></i>
+              <span>ChatGPT Code</span>
+            </div>
+            <div class="toggle-btn" data-target="#gemini-output">
               <i class="fas fa-table"></i>
-              <span>Analytics Data</span>
+              <span>Gemini Data</span>
+            </div>
+            <div class="toggle-btn" data-target="#chatgpt-output">
+              <i class="fas fa-table"></i>
+              <span>ChatGPT Data</span>
             </div>
             <div class="toggle-btn" data-target="#vector-matches">
               <i class="fas fa-search"></i>
@@ -290,14 +298,24 @@ HTML = """
             </div>
           </div>
           
-          <div id="pandas-code" class="toggle-content">
-            <h4 style="color: var(--text-muted); margin-bottom: 12px; font-size: 14px;">🤖 AI-Generated Pandas Code:</h4>
-            <div class="code-block" id="pandas-code-content">Click "Pandas Code" to see the AI-generated pandas query...</div>
+          <div id="gemini-code" class="toggle-content">
+            <h4 style="color: var(--text-muted); margin-bottom: 12px; font-size: 14px;">🤖 Gemini Pandas Code:</h4>
+            <div class="code-block" id="gemini-code-content">Click "Gemini Code" to see the AI-generated pandas query...</div>
           </div>
-          
-          <div id="pandas-output" class="toggle-content">
-            <h4 style="color: var(--text-muted); margin-bottom: 12px; font-size: 14px;">📊 Analytics Results:</h4>
-            <div class="json-block" id="pandas-output-content">Click "Analytics Data" to see the pandas output...</div>
+
+          <div id="chatgpt-code" class="toggle-content">
+            <h4 style="color: var(--text-muted); margin-bottom: 12px; font-size: 14px;">🤖 ChatGPT Pandas Code:</h4>
+            <div class="code-block" id="chatgpt-code-content">Click "ChatGPT Code" to see the AI-generated pandas query...</div>
+          </div>
+
+          <div id="gemini-output" class="toggle-content">
+            <h4 style="color: var(--text-muted); margin-bottom: 12px; font-size: 14px;">📊 Gemini Analytics Results:</h4>
+            <div class="json-block" id="gemini-output-content">Click "Gemini Data" to see the pandas output...</div>
+          </div>
+
+          <div id="chatgpt-output" class="toggle-content">
+            <h4 style="color: var(--text-muted); margin-bottom: 12px; font-size: 14px;">📊 ChatGPT Analytics Results:</h4>
+            <div class="json-block" id="chatgpt-output-content">Click "ChatGPT Data" to see the pandas output...</div>
           </div>
           
           <div id="vector-matches" class="toggle-content">
@@ -312,28 +330,32 @@ HTML = """
     <div class="stats-grid">
       <div class="stat-card">
         <h3><i class="fas fa-brain"></i> AI Agent Status</h3>
-        <p>Hybrid RAG system with semantic retrieval + dynamic pandas analytics. All AI models are cached for instant responses.</p>
+        <p>Multimodal RAG: semantic retrieval + dual analytics (Gemini + ChatGPT). Models are cached for instant responses.</p>
         <div class="stat-badges">
           <div class="stat-badge success">Pinecone ✓</div>
           <div class="stat-badge success">HuggingFace ✓</div>
           <div class="stat-badge success">Gemini ✓</div>
+          <div class="stat-badge success">OpenAI ✓</div>
         </div>
       </div>
       
       <div class="stat-card">
         <h3><i class="fas fa-database"></i> Data Pipeline</h3>
-        <p>Real-time analytics with 147K+ property records. Dynamic pandas code generation and vector similarity search.</p>
+        <p>Real-time analytics with 147K+ property records. Dual pandas code generation (Gemini + ChatGPT) and vector search.</p>
         <div class="stat-badges">
           <div class="stat-badge">147K Properties</div>
-          <div class="stat-badge">Real-time Analytics</div>
+          <div class="stat-badge">Dual Analytics</div>
           <div class="stat-badge">Vector Search</div>
+          <div class="stat-badge">OpenAI Compose</div>
         </div>
       </div>
       
       <div class="stat-card">
         <h3><i class="fas fa-magic"></i> Features</h3>
-        <p>Advanced AI capabilities including natural language queries, constraint extraction, and intelligent response generation.</p>
+        <p>Multimodal analytics (Gemini + ChatGPT), natural language queries, constraint extraction, and composed responses.</p>
         <div class="stat-badges">
+          <div class="stat-badge">Multimodal</div>
+          <div class="stat-badge">Dual Pandas</div>
           <div class="stat-badge">NL Queries</div>
           <div class="stat-badge">Smart Filters</div>
           <div class="stat-badge">Markdown Output</div>
@@ -420,9 +442,16 @@ HTML = """
             <div class="markdown">${md(j.answer)}</div>
           `;
           
-          // Update toggle content with new data
-          document.getElementById('pandas-code-content').textContent = j.analytics.generated_code || 'No pandas code generated';
-          document.getElementById('pandas-output-content').textContent = JSON.stringify(j.analytics.rows || [], null, 2);
+          // Update toggle content with new data (Gemini & ChatGPT separately)
+          const gemCode = j.analytics?.gemini?.generated_code || '';
+          const chgCode = j.analytics?.chatgpt?.generated_code || '';
+          const gemRows = j.analytics?.gemini?.rows || [];
+          const chgRows = j.analytics?.chatgpt?.rows || [];
+
+          document.getElementById('gemini-code-content').textContent = gemCode || 'No pandas code generated';
+          document.getElementById('chatgpt-code-content').textContent = chgCode || 'No pandas code generated';
+          document.getElementById('gemini-output-content').textContent = JSON.stringify(gemRows, null, 2);
+          document.getElementById('chatgpt-output-content').textContent = JSON.stringify(chgRows, null, 2);
           document.getElementById('vector-matches-content').textContent = JSON.stringify(j.matches || [], null, 2);
         }
       } catch (err) {
@@ -446,8 +475,11 @@ HTML = """
       allContents.forEach(c => c.classList.remove('active'));
       
       // Reset content to default messages
-      document.getElementById('pandas-code-content').textContent = 'Click "Pandas Code" to see the AI-generated pandas query...';
-      document.getElementById('pandas-output-content').textContent = 'Click "Analytics Data" to see the pandas output...';
+      const reset = (id, msg) => { const el = document.getElementById(id); if (el) el.textContent = msg; };
+      reset('gemini-code-content', 'Click "Gemini Code" to see the AI-generated pandas query...');
+      reset('chatgpt-code-content', 'Click "ChatGPT Code" to see the AI-generated pandas query...');
+      reset('gemini-output-content', 'Click "Gemini Data" to see the pandas output...');
+      reset('chatgpt-output-content', 'Click "ChatGPT Data" to see the pandas output...');
       document.getElementById('vector-matches-content').textContent = 'Click "Vector Matches" to see semantic search results...';
     }
     
@@ -474,13 +506,15 @@ def api_ask():
         return jsonify({"error":"empty query"}), 400
     
     try:
-        # Run analytics first to expose generated code, then vector search
+        # Run analytics (Gemini + ChatGPT) and vector search
         print(f"[DEBUG] Processing query: {q}")
-        analytics = RAG_AGENT.analytics_agent.analyze(q, top_k=7)
-        print(f"[DEBUG] Analytics completed")
+        both_analytics = RAG_AGENT.analyze_both(q, top_k=7)
+        analytics_gemini = both_analytics.get('gemini', {"context":"","rows":[],"generated_code":""})
+        analytics_chatgpt = both_analytics.get('chatgpt', {"context":"","rows":[],"generated_code":""})
+        print(f"[DEBUG] Analytics completed (Gemini + ChatGPT)")
         matches = RAG_AGENT.search_properties(q, top_k=7)
         print(f"[DEBUG] Vector search completed: {len(matches)} matches")
-        answer = RAG_AGENT.generate_response(q, matches)
+        answer = RAG_AGENT.generate_response_with_context(q, matches, analytics_gemini, analytics_chatgpt)
         print(f"[DEBUG] Response generated")
         
         # Convert to JSON-serializable format
@@ -523,12 +557,20 @@ def api_ask():
                 except:
                     return None
         
-        # Clean analytics data
-        analytics_clean = clean_for_json(analytics)
+        # Clean analytics data (both)
+        analytics_gemini_clean = clean_for_json(analytics_gemini)
+        analytics_chatgpt_clean = clean_for_json(analytics_chatgpt)
         analytics_serializable = {
-            "context": str(analytics_clean.get('context', '')),
-            "generated_code": str(analytics_clean.get('generated_code', '')),
-            "rows": analytics_clean.get('rows', [])
+            "gemini": {
+                "context": str(analytics_gemini_clean.get('context', '')),
+                "generated_code": str(analytics_gemini_clean.get('generated_code', '')),
+                "rows": analytics_gemini_clean.get('rows', [])
+            },
+            "chatgpt": {
+                "context": str(analytics_chatgpt_clean.get('context', '')),
+                "generated_code": str(analytics_chatgpt_clean.get('generated_code', '')),
+                "rows": analytics_chatgpt_clean.get('rows', [])
+            }
         }
         
         # Clean matches data
