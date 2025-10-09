@@ -109,8 +109,9 @@ FILTERING RULES:
 - Counts: Use == for exact match, >= for "or more"
 - Price: < for "under", > for "over", <= for "up to"
 - Sort: ascending=True for "cheapest", descending=True for "expensive"
+- Crime queries: Use df.groupby('address')['crime_score_weight'].mean() for city-level analysis
 
-Available columns: {', '.join(list(self.schema.keys())[:10])}
+Available columns: {', '.join(list(self.schema.keys())[:15])}
 
 Query: {nl_query}
 
@@ -188,17 +189,58 @@ Code:
             elif 'manchester' in query_lower and 'address' in tmp.columns:
                 tmp = tmp[tmp['address'].str.contains('manchester', case=False, na=False)]
             
-            # Sort by price for cheapest queries
-            if 'cheapest' in query_lower and 'price' in tmp.columns:
-                tmp = tmp.sort_values('price', ascending=True)
-            elif 'expensive' in query_lower and 'price' in tmp.columns:
-                tmp = tmp.sort_values('price', ascending=False)
-            elif 'days_since_update' in tmp.columns:
-                tmp = tmp.sort_values('days_since_update', ascending=True)
-            elif 'price' in tmp.columns:
-                tmp = tmp.sort_values('price', ascending=True)
-            
-            local_env['result'] = tmp[cols].head(top_k)
+            # Handle crime rate queries
+            if 'crime' in query_lower and 'crime_score_weight' in tmp.columns and 'address' in tmp.columns:
+                crime_by_city = tmp.groupby('address')['crime_score_weight'].mean().sort_values(ascending=False)
+                if 'highest' in query_lower:
+                    # Return top cities with highest crime + sample properties from those cities
+                    result_data = []
+                    top_cities = crime_by_city.head(3)  # Top 3 highest crime cities
+                    
+                    for city, crime_score in top_cities.items():
+                        # Add city summary
+                        result_data.append({
+                            'address': city, 
+                            'crime_score_weight': crime_score,
+                            'property_type_full_description': f'City Summary',
+                            'bedrooms': '',
+                            'bathrooms': '',
+                            'price': '',
+                            'type_standardized': 'city_summary'
+                        })
+                        
+                        # Add sample properties from this high-crime city
+                        city_properties = tmp[tmp['address'] == city].head(2)
+                        for _, prop in city_properties.iterrows():
+                            result_data.append({
+                                'address': city,
+                                'crime_score_weight': crime_score,
+                                'property_type_full_description': str(prop.get('property_type_full_description', '')),
+                                'bedrooms': prop.get('bedrooms', ''),
+                                'bathrooms': prop.get('bathrooms', ''),
+                                'price': prop.get('price', ''),
+                                'type_standardized': str(prop.get('type_standardized', ''))
+                            })
+                    
+                    local_env['result'] = pd.DataFrame(result_data)
+                else:
+                    # Return top cities with lowest crime
+                    result_data = []
+                    for city, crime_score in crime_by_city.tail(top_k).items():
+                        result_data.append({'address': city, 'crime_score_weight': crime_score})
+                    local_env['result'] = pd.DataFrame(result_data)
+            else:
+                # Sort by price for cheapest queries
+                if 'cheapest' in query_lower and 'price' in tmp.columns:
+                    tmp = tmp.sort_values('price', ascending=True)
+                elif 'expensive' in query_lower and 'price' in tmp.columns:
+                    tmp = tmp.sort_values('price', ascending=False)
+                elif 'days_since_update' in tmp.columns:
+                    tmp = tmp.sort_values('days_since_update', ascending=True)
+                elif 'price' in tmp.columns:
+                    tmp = tmp.sort_values('price', ascending=True)
+                
+                local_env['result'] = tmp[cols].head(top_k)
 
         result_df = local_env.get('result')
         if not isinstance(result_df, pd.DataFrame):
@@ -209,20 +251,30 @@ Code:
         # Build concise context
         lines = []
         for _, row in result_df.iterrows():
-            desc = str(row.get('property_type_full_description', '')) or str(row.get('type_standardized', ''))
-            bed = row.get('bedrooms', '')
-            bath = row.get('bathrooms', '')
-            price = row.get('price', '')
-            addr = row.get('address', '')
-            new_home = row.get('is_new_home', False)
-            
-            # Format: Property Type - £Price - Address (X bed, X bath) [New]
-            line = f"{desc} - £{price} - {addr} ({bed} bed, {bath} bath)"
-            if new_home:
-                line += " [New]"
+            # Check if this is a crime analysis result
+            if 'crime_score_weight' in result_df.columns and row.get('type_standardized') == 'city_summary':
+                # Crime analysis format: City - Crime Score
+                addr = row.get('address', '')
+                crime_score = row.get('crime_score_weight', '')
+                line = f"CRIME DATA: {addr} has the highest crime rate with score {crime_score}"
+            else:
+                # Property format: Property Type - £Price - Address (X bed, X bath) [New]
+                desc = str(row.get('property_type_full_description', '')) or str(row.get('type_standardized', ''))
+                bed = row.get('bedrooms', '')
+                bath = row.get('bathrooms', '')
+                price = row.get('price', '')
+                addr = row.get('address', '')
+                new_home = row.get('is_new_home', False)
+                crime_score = row.get('crime_score_weight', '')
+                
+                line = f"{desc} - £{price} - {addr} ({bed} bed, {bath} bath)"
+                if new_home:
+                    line += " [New]"
+                if crime_score and crime_score != '':
+                    line += f" [Crime Score: {crime_score}]"
             lines.append(line)
         
-        context = "\n".join(lines) if lines else "No matching properties found."
+        context = "\n".join(lines) if lines else "No matching data found."
         return {"context": context, "rows": result_df.to_dict(orient='records'), "generated_code": safe_code}
 
 def setup_pinecone():
@@ -510,8 +562,10 @@ class PropertyRAGAgent:
         # new home
         if 'new home' in q or 'new homes' in q:
             constraints['is_new_home'] = True
-        # low crime
-        if 'low crime' in q:
+        # crime constraints
+        if 'highest crime' in q or 'high crime' in q:
+            constraints['high_crime'] = True
+        elif 'low crime' in q:
             constraints['low_crime'] = True
         return constraints
 
@@ -541,6 +595,13 @@ class PropertyRAGAgent:
         if cons.get('low_crime') is True:
             try:
                 if float(md.get('crime_score', 10.0)) > 3.0:
+                    return False
+            except Exception:
+                return False
+        # high crime
+        if cons.get('high_crime') is True:
+            try:
+                if float(md.get('crime_score', 0.0)) < 8.0:  # Only show high crime areas (8+)
                     return False
             except Exception:
                 return False
@@ -603,7 +664,7 @@ class PropertyRAGAgent:
             
             # Create prompt for Gemini
             prompt = f"""
-You are Property RAG Assistant. Provide concise, helpful responses about properties.
+You are Property RAG Assistant. Answer the user's question using the provided data.
 
 User Query: {query}
 
@@ -611,12 +672,12 @@ Available Data:
 {analytics_context}
 
 Instructions:
-- Give a brief 2-3 sentence answer
-- List 3-4 best properties with: type, bedrooms, bathrooms, price, address
+- Answer the question directly using the provided data
+- If the data shows crime scores, use them to answer crime-related questions
+- If the data shows properties, list them with: type, bedrooms, bathrooms, price, address
 - Use format: "Property Type - £X - Address (X bed, X bath)"
-- Prioritize analytics data over vector matches
-- No duplicate information or verbose descriptions
-- Be direct and helpful
+- Be confident and helpful - the data is accurate
+- Don't say "data not available" if data is provided
 """
             
             # Generate response
