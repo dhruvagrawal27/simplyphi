@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 
 # Load .env
-load_dotenv()
+load_dotenv(override=True)
 
 # API Keys
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
@@ -129,6 +129,19 @@ Code:
             code = gen.text or ""
         except Exception as e:
             code = ""
+
+        # Extract code from markdown fences if present
+        def extract_code(text: str) -> str:
+            try:
+                import re
+                m = re.search(r"```[a-zA-Z0-9_\-]*\n([\s\S]*?)```", text)
+                if m:
+                    return m.group(1).strip()
+                return text.strip()
+            except Exception:
+                return text
+
+        code = extract_code(code)
 
         # Build a safe execution environment
         local_env: Dict[str, Any] = {}
@@ -330,10 +343,14 @@ Code:
 
         # Call OpenAI (primary)
         code = ""
+        error_msg = ""
         try:
-            from openai import OpenAI
             client = get_openai_client()
-            if client is not None:
+            if client is None:
+                error_msg = "OpenAI client not initialized (check OPENAI_API_KEY)"
+                print(f"[WARN] {error_msg}")
+            else:
+                print(f"[DEBUG] Calling OpenAI API for query: {nl_query}")
                 completion = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
@@ -344,17 +361,51 @@ Code:
                     max_tokens=300
                 )
                 code = (completion.choices[0].message.content or "").strip()
-        except Exception:
+                print(f"[DEBUG] ChatGPT raw response: {code[:200]}")
+        except Exception as e:
+            error_msg = f"OpenAI API error: {str(e)}"
+            print(f"[ERROR] {error_msg}")
             code = ""
 
         # LangChain fallback if no code
         if not code:
             try:
+                print("[DEBUG] Trying LangChain fallback...")
                 from langchain_openai import ChatOpenAI
                 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2, openai_api_key=OPENAI_API_KEY)
-                code = (llm.invoke(prompt).content or "").strip()
-            except Exception:
+                response = llm.invoke(prompt)
+                code = (response.content or "").strip()
+                print(f"[DEBUG] LangChain response: {code[:200]}")
+            except Exception as e:
+                print(f"[ERROR] LangChain fallback failed: {str(e)}")
                 code = ""
+
+        # Extract code from markdown fences if present
+        def extract_code(text: str) -> str:
+            if not text:
+                return ""
+            try:
+                import re
+                # Try to find code in markdown fences
+                m = re.search(r"```(?:python|py)?\n([\s\S]*?)```", text)
+                if m:
+                    extracted = m.group(1).strip()
+                    print(f"[DEBUG] Extracted code from markdown: {extracted[:100]}")
+                    return extracted
+                # If no markdown, return as-is
+                print(f"[DEBUG] No markdown fence found, using raw text")
+                return text.strip()
+            except Exception as e:
+                print(f"[ERROR] Code extraction failed: {e}")
+                return text.strip()
+
+        code = extract_code(code)
+        
+        if not code:
+            print(f"[WARN] No code generated for query: {nl_query}")
+            print(f"[WARN] Error message: {error_msg}")
+        else:
+            print(f"[DEBUG] Final code to execute: {code}")
 
         # Safe execution environment
         local_env: Dict[str, Any] = {}
@@ -377,14 +428,16 @@ Code:
             if (line and 
                 not line.startswith('#') and 
                 not line.startswith('"""') and 
-                not line.startswith("'''") and
-                '```' not in line):
+                not line.startswith("'''") ):
                 cleaned_lines.append(line)
         safe_code = '\n'.join(cleaned_lines)
 
         try:
+            print(f"[DEBUG] Executing safe code: {safe_code}")
             exec(safe_code, {}, local_env)
-        except Exception:
+            print(f"[DEBUG] Code execution successful")
+        except Exception as e:
+            print(f"[ERROR] Code execution failed: {e}")
             # fallback heuristic mirroring DataAnalyticsAgent basics
             tmp = df.copy()
             cols = [c for c in ['type_standardized','property_type_full_description','bedrooms','bathrooms','price','address','is_new_home','listing_update_date','days_since_update','price_category'] if c in tmp.columns]
@@ -415,7 +468,48 @@ Code:
                 line += " [New]"
             lines.append(line)
         context = "\n".join(lines) if lines else "No matching data found."
+        
         return {"context": context, "rows": result_df.to_dict(orient='records'), "generated_code": safe_code}
+
+
+def setup_openai() -> Optional[object]:
+    try:
+        from openai import OpenAI
+        if not OPENAI_API_KEY:
+            print("[ERROR] OPENAI_API_KEY is not set in environment")
+            print("[INFO] Please add OPENAI_API_KEY to your .env file")
+            return None
+        print("[INIT] Initializing OpenAI client...")
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        # Quick smoke test
+        try:
+            models = client.models.list()
+            print(f"[OK] OpenAI client ready! (Found {len(list(models.data))} models)")
+        except Exception as e:
+            print(f"[WARN] OpenAI client created but test failed: {e}")
+        return client
+    except ImportError:
+        print("[ERROR] openai package not installed. Installing...")
+        os.system("pip install openai>=1.45.0")
+        try:
+            from openai import OpenAI  # noqa: F401
+            return setup_openai()
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize OpenAI after install: {e}")
+            return None
+    except Exception as e:
+        print(f"[ERROR] Error setting up OpenAI: {e}")
+        return None
+
+def get_openai_client():
+    global _CACHED_OPENAI_CLIENT
+    if _CACHED_OPENAI_CLIENT is not None:
+        return _CACHED_OPENAI_CLIENT
+    client = setup_openai()
+    # Only cache a successful client; don't cache None to allow later retries
+    if client is not None:
+        _CACHED_OPENAI_CLIENT = client
+    return client
 
 def setup_pinecone():
     """Initialize Pinecone client and create index"""
@@ -913,63 +1007,6 @@ Instructions:
             print(f"[ERROR] Error generating response_with_context: {e}")
             return "I'm sorry, I encountered an error while processing your request."
 
-# OpenAI setup helpers
-def setup_openai() -> Optional[object]:
-    try:
-        from openai import OpenAI
-        if not OPENAI_API_KEY:
-            print("[ERROR] OPENAI_API_KEY is not set")
-            return None
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        # quick smoke test
-        try:
-            client.models.list()
-        except Exception:
-            pass
-        print("[OK] OpenAI client ready!")
-        return client
-    except ImportError:
-        print("[ERROR] openai package not installed. Installing...")
-        os.system("pip install openai>=1.45.0")
-        try:
-            from openai import OpenAI  # noqa: F401
-            return setup_openai()
-        except Exception as e:
-            print(f"[ERROR] Failed to initialize OpenAI after install: {e}")
-            return None
-    except Exception as e:
-        print(f"[ERROR] Error setting up OpenAI: {e}")
-        return None
-
-def get_openai_client():
-    global _CACHED_OPENAI_CLIENT
-    if _CACHED_OPENAI_CLIENT is not None:
-        return _CACHED_OPENAI_CLIENT
-    _CACHED_OPENAI_CLIENT = setup_openai()
-    return _CACHED_OPENAI_CLIENT
-    
-    def chat(self, query: str) -> str:
-        """Main chat function that combines search and generation"""
-        print(f"\n[SEARCH] Query: {query}")
-        
-        # Search for relevant properties
-        search_results = self.search_properties(query, top_k=5)
-        
-        if not search_results:
-            return "I couldn't find any relevant properties for your query. Please try rephrasing your question."
-        
-        print(f"[INFO] Found {len(search_results)} relevant properties")
-        
-        # Generate response
-        response = self.generate_response(query, search_results)
-        
-        # Also show the raw search results for transparency
-        print("\n[INFO] Search Results:")
-        for i, result in enumerate(search_results, 1):
-            metadata = result['metadata']
-            print(f"{i}. {metadata['type']} - £{metadata['price']} - {metadata['address']} (Score: {result['score']:.3f})")
-        
-        return response
 
 def main():
     """Main function to set up the complete RAG system"""

@@ -1,3 +1,18 @@
+import os
+
+# CRITICAL: Clear cached environment variables BEFORE importing anything
+if 'OPENAI_API_KEY' in os.environ:
+    print(f"[CLEANUP] Removing cached OPENAI_API_KEY from environment")
+    del os.environ['OPENAI_API_KEY']
+
+if 'GEMINI_API_KEY' in os.environ:
+    print(f"[CLEANUP] Removing cached GEMINI_API_KEY from environment")
+    del os.environ['GEMINI_API_KEY']
+
+if 'PINECONE_API_KEY' in os.environ:
+    print(f"[CLEANUP] Removing cached PINECONE_API_KEY from environment")
+    del os.environ['PINECONE_API_KEY']
+
 from flask import Flask, render_template_string, request, jsonify
 import threading
 import markdown
